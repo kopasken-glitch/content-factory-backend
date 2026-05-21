@@ -78,14 +78,22 @@ function buildPublicUrl(filePath) {
 
 async function uploadBufferToSupabase(buffer, mimeType, folder = 'uploads') {
   const ext = safeExtFromMime(mimeType);
-  const safeFolder = sanitizeStorageSegment(folder);
+  const safeFolder = sanitizeStorageSegment(folder).replace(/\//g, '-');
   const dateFolder = new Date().toISOString().slice(0, 10);
-  const fileName = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
-  const filePath = normalizeStoragePath(`${safeFolder}/${dateFolder}/${fileName}`);
+
+  const filePath = normalizeStoragePath(
+    `${safeFolder}-${dateFolder}-${Date.now()}-${crypto.randomUUID()}.${ext}`
+  ).replace(/\//g, '-');
 
   if (!filePath || filePath.startsWith('/') || filePath.includes('//')) {
     throw new Error(`Invalid normalized Supabase path: ${filePath}`);
   }
+
+  console.log('Uploading to Supabase:', {
+    bucket: SUPABASE_BUCKET,
+    path: filePath,
+    mimeType
+  });
 
   const { error } = await supabase.storage.from(SUPABASE_BUCKET).upload(filePath, buffer, {
     contentType: mimeType || 'application/octet-stream',
