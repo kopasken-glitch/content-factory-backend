@@ -133,11 +133,62 @@ function parseOpenAIText(data) {
   const chunks = [];
   for (const item of data.output || []) {
     for (const c of item.content || []) {
-      if (c.text) chunks.push(c.text);
-      if (c.type === 'output_text' && c.text) chunks.push(c.text);
+      if (typeof c.text === 'string') chunks.push(c.text);
+      if (typeof c.content === 'string') chunks.push(c.content);
+      if (c.type === 'output_text' && typeof c.text === 'string') chunks.push(c.text);
     }
   }
   return chunks.join('\n').trim();
+}
+
+function extractJsonObject(text) {
+  const cleaned = String(text || '')
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (_) {}
+
+  const first = cleaned.indexOf('{');
+  const last = cleaned.lastIndexOf('}');
+  if (first !== -1 && last !== -1 && last > first) {
+    const sliced = cleaned.slice(first, last + 1);
+    try {
+      return JSON.parse(sliced);
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+function normalizeSceneObject(scene, index) {
+  return {
+    scene: Number(scene.scene || scene.number || index + 1),
+    duration: Number(scene.duration || scene.durationSeconds || scene.seconds || 6),
+    narration: String(scene.narration || scene.voiceover || scene.line || ''),
+    visual: String(scene.visual || scene.description || ''),
+    imagePrompt: String(scene.imagePrompt || scene.image_prompt || scene.prompt || scene.visual || ''),
+    videoPrompt: String(scene.videoPrompt || scene.video_prompt || scene.motionPrompt || scene.imagePrompt || scene.visual || ''),
+    onScreenText: String(scene.onScreenText || scene.on_screen_text || scene.text || '')
+  };
+}
+
+function normalizeStoryboardPayload(payload, fallbackText = '') {
+  if (!payload || typeof payload !== 'object') return null;
+  const rawScenes = Array.isArray(payload.scenes) ? payload.scenes : [];
+  const scenes = rawScenes.map(normalizeSceneObject).filter((s) => s.imagePrompt || s.visual || s.narration);
+
+  if (!scenes.length) return null;
+
+  return {
+    title: String(payload.title || 'Generated storyboard'),
+    totalDuration: Number(payload.totalDuration || payload.total_duration || scenes.reduce((sum, s) => sum + Number(s.duration || 0), 0) || 30),
+    script: String(payload.script || payload.narration || fallbackText || scenes.map((s) => s.narration).filter(Boolean).join(' ')),
+    scenes
+  };
 }
 
 app.get('/api/health', async (req, res) => {
@@ -177,63 +228,105 @@ app.post('/api/generate-script', async (req, res) => {
     const { idea, model = 'gpt-4.1-mini' } = req.body;
     if (!idea) return res.status(400).json({ ok: false, error: 'Idea is required' });
 
+    const schema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['title', 'totalDuration', 'script', 'scenes'],
+      properties: {
+        title: { type: 'string' },
+        totalDuration: { type: 'number' },
+        script: { type: 'string' },
+        scenes: {
+          type: 'array',
+          minItems: 3,
+          maxItems: 12,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['scene', 'duration', 'narration', 'visual', 'imagePrompt', 'videoPrompt', 'onScreenText'],
+            properties: {
+              scene: { type: 'number' },
+              duration: { type: 'number' },
+              narration: { type: 'string' },
+              visual: { type: 'string' },
+              imagePrompt: { type: 'string' },
+              videoPrompt: { type: 'string' },
+              onScreenText: { type: 'string' }
+            }
+          }
+        }
+      }
+    };
+
     const prompt = `
-Ты создаёшь сценарий короткого вертикального UGC-видео для американской аудитории.
+Create a short vertical UGC video storyboard for a US audience.
 
-Сначала скрыто сделай research по YouTube: найди похожие популярные видео и темы, ориентируйся на видео с 100000+ просмотров, если просмотры доступны в публичных данных.
-Не показывай пользователю research, ссылки и источники. Используй только выводы: хук, темп, структура, визуальные паттерны, удержание, CTA.
-
-Пользовательская идея:
+User idea:
 ${idea}
 
-Требования:
-- Определи количество сцен самостоятельно.
-- Определи длительность каждой сцены самостоятельно.
-- Не делай одинаковую длительность всех сцен.
-- Обычно 5-10 сцен для ролика 25-45 секунд.
-- Первые 1-3 секунды должны быть сильным хуком.
-- Язык сценария: английский, естественный американский разговорный стиль.
-- Не копируй чужие формулировки.
-- Верни ответ строго в JSON без markdown.
+Before writing the storyboard, use web search internally to understand successful YouTube videos on similar topics. Prefer patterns from videos that appear popular or have 100,000+ views when that information is publicly visible.
+Do not output links, research notes, citations, or analytics. Use only the best practices: hook, pacing, visual pattern, retention structure, and CTA.
 
-Формат JSON:
-{
-  "title": "...",
-  "totalDuration": 30,
-  "script": "full narration text",
-  "scenes": [
-    {
-      "scene": 1,
-      "duration": 3,
-      "narration": "...",
-      "visual": "...",
-      "imagePrompt": "...",
-      "videoPrompt": "...",
-      "onScreenText": "..."
-    }
-  ]
-}
-`;
+Rules:
+- Language of narration: natural conversational American English.
+- Decide the number of scenes yourself.
+- Decide each scene duration yourself.
+- Do not make all scenes the same length.
+- If the user mentions a target duration, stay close to it. Otherwise aim for about 30 seconds.
+- Usually use 5-10 scenes for 25-45 seconds.
+- First 1-3 seconds must be a strong hook.
+- Keep scenes simple enough for image/video generation.
+- imagePrompt must be in English and must describe: action, environment, outfit, camera angle, lighting, mood, depth of field. Do not describe exact facial identity because reference images define the character.
+- videoPrompt must describe camera movement and subject motion for the same scene.
+- Return only data matching the schema.`;
 
-    const response = await fetch('https://api.openai.com/v1/responses', {
+    const requestBody = {
+      model,
+      input: [
+        {
+          role: 'system',
+          content: 'You are a senior short-form UGC scriptwriter, storyboard director, and YouTube research analyst. Return only valid structured storyboard data.'
+        },
+        { role: 'user', content: prompt }
+      ],
+      max_output_tokens: 5000,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'storyboard_response',
+          strict: true,
+          schema
+        }
+      }
+    };
+
+    // Web search is useful, but structured JSON is more important.
+    // If this account/model rejects the search tool, the fallback request below runs without it.
+    let response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${requireEnv('OPENAI_API_KEY')}`
       },
       body: JSON.stringify({
-        model,
-        tools: [{ type: 'web_search' }],
-        input: [
-          {
-            role: 'system',
-            content: 'Ты профессиональный сценарист коротких вертикальных UGC-видео, режиссёр и YouTube research analyst. Финально отвечай только валидным JSON.'
-          },
-          { role: 'user', content: prompt }
-        ],
-        max_output_tokens: 5000
+        ...requestBody,
+        tools: [{ type: 'web_search_preview' }]
       })
     });
+
+    if (!response.ok) {
+      const firstErrorText = await response.text().catch(() => '');
+      console.warn('OpenAI request with web search failed, retrying without web search:', firstErrorText.slice(0, 800));
+
+      response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${requireEnv('OPENAI_API_KEY')}`
+        },
+        body: JSON.stringify(requestBody)
+      });
+    }
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');
@@ -242,13 +335,19 @@ ${idea}
 
     const data = await response.json();
     const text = parseOpenAIText(data);
+    const rawParsed = extractJsonObject(text);
+    const parsed = normalizeStoryboardPayload(rawParsed, text);
 
-    let parsed = null;
-    try {
-      parsed = JSON.parse(text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim());
-    } catch (_) {}
+    if (!parsed) {
+      console.error('OpenAI did not return usable storyboard:', JSON.stringify(data).slice(0, 5000));
+      return res.status(500).json({
+        ok: false,
+        error: 'OpenAI did not return a usable scenes array. Try a more specific idea.',
+        text
+      });
+    }
 
-    res.json({ ok: true, text, parsed });
+    res.json({ ok: true, text: JSON.stringify(parsed, null, 2), parsed });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
