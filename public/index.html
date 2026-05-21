@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StoryAI — Гиперреализм</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#F5F3EE;--surface:#FFFFFF;--surface2:#EFEDE7;--border:#E0DDD6;--border2:#C8C4BB;
+  --text:#18160F;--text2:#6A6660;--text3:#A09B94;
+  --green:#2A5C45;--green2:#3D8A65;--green-bg:#E8F4EE;--green-text:#1A3D2D;
+  --amber:#92600A;--amber-bg:#FEF3C7;--red:#B83232;--red-bg:#FDEAEA;
+  --r:10px;--r-sm:6px;--sh:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.04);--sh-md:0 4px 16px rgba(0,0,0,.10);
+}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line-height:1.6}
+nav{background:var(--surface);border-bottom:1px solid var(--border);height:56px;display:flex;align-items:center;padding:0 2rem;gap:1.5rem;position:sticky;top:0;z-index:200}
+.logo{font-family:'Instrument Serif',serif;font-size:20px;letter-spacing:-.3px}
+.logo em{color:var(--green);font-style:italic}
+.pill{font-size:11px;font-weight:600;background:var(--green-bg);color:var(--green-text);padding:3px 10px;border-radius:20px}
+nav .spacer{flex:1}
+.nav-step{display:flex;align-items:center;gap:5px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--border2);transition:background .3s}
+.dot.active{background:var(--green)}
+.dot.done{background:var(--green2)}
+.layout{display:grid;grid-template-columns:360px 1fr;min-height:calc(100vh - 56px)}
+.sidebar{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.ss{padding:1.25rem 1.5rem;border-bottom:1px solid var(--border)}
+.ss:last-child{border-bottom:none}
+.lbl{font-size:10px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--text3);margin-bottom:.7rem}
+.api-grid{display:flex;flex-direction:column;gap:8px}
+.api-row{display:flex;flex-direction:column;gap:3px}
+.api-row span{font-size:11px;font-weight:600;color:var(--text2)}
+.api-row input,.api-row select{background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 10px;font-family:monospace;font-size:12px;color:var(--text);outline:none;width:100%;transition:border-color .2s}
+.api-row input:focus,.api-row select:focus{border-color:var(--green2)}
+.api-dot{width:7px;height:7px;border-radius:50%;background:var(--border2);display:inline-block;margin-left:5px;vertical-align:middle}
+.api-dot.ok{background:var(--green2)}
+.char-drop{border:1.5px dashed var(--border2);border-radius:var(--r);padding:1.25rem;text-align:center;cursor:pointer;transition:all .2s;position:relative;background:var(--bg)}
+.char-drop:hover,.char-drop.over{border-color:var(--green2);background:var(--green-bg)}
+.char-drop input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.char-drop-icon{font-size:26px;margin-bottom:.4rem}
+.char-drop p{font-size:12px;color:var(--text2);font-weight:500}
+.char-drop small{font-size:11px;color:var(--text3)}
+.char-previews{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.char-thumb{position:relative;width:58px;height:58px;border-radius:var(--r-sm);overflow:hidden;border:1.5px solid var(--border)}
+.char-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.char-thumb button{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.7);border:none;border-radius:50%;width:16px;height:16px;color:white;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+textarea.idea{width:100%;min-height:110px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r);padding:11px;font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text);resize:none;outline:none;transition:border-color .2s;line-height:1.6}
+textarea.idea:focus{border-color:var(--green2)}
+textarea.idea::placeholder{color:var(--text3)}
+.hint{font-size:11px;color:var(--text3);margin-top:5px;line-height:1.5}
+.cfg{display:flex;gap:8px;margin-top:10px}
+.cfg select{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);padding:8px 10px;font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text);outline:none;appearance:none;cursor:pointer}
+.cfg select:focus{border-color:var(--green2)}
+.btn-main{width:100%;background:var(--green);color:white;border:none;border-radius:var(--r);padding:13px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background .2s,transform .1s}
+.btn-main:hover{background:var(--green2)}
+.btn-main:active{transform:scale(.99)}
+.btn-main:disabled{background:var(--text3);cursor:not-allowed;transform:none}
+.prog-wrap{padding:.75rem 1.5rem;background:var(--green-bg);border-bottom:1px solid #C8E6D6;display:flex;flex-direction:column;gap:5px}
+.prog-label{font-size:12px;font-weight:500;color:var(--green-text)}
+.prog-bar{height:3px;background:rgba(42,92,69,.15);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;background:var(--green);border-radius:2px;transition:width .4s ease}
+.main{padding:2rem;display:flex;flex-direction:column;gap:1.5rem;overflow-y:auto}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:400px;text-align:center;gap:1rem}
+.empty-icon{width:70px;height:70px;border-radius:50%;background:var(--surface);border:1.5px dashed var(--border2);display:flex;align-items:center;justify-content:center;font-size:26px}
+.empty h2{font-family:'Instrument Serif',serif;font-size:25px;font-weight:400}
+.empty p{font-size:13px;color:var(--text2);max-width:280px}
+.script-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.25rem;box-shadow:var(--sh)}
+.script-card h3{font-family:'Instrument Serif',serif;font-size:17px;font-weight:400;margin-bottom:.7rem;display:flex;align-items:center;gap:7px}
+.script-body{font-size:13px;color:var(--text2);line-height:1.8;white-space:pre-wrap}
+.approve-bar{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.25rem;display:flex;align-items:center;gap:1rem;box-shadow:var(--sh)}
+.approve-bar p{flex:1;font-size:13px;color:var(--text2)}
+.approve-bar strong{color:var(--text);font-weight:600}
+.btn-outline{background:transparent;border:1px solid var(--border2);border-radius:var(--r-sm);padding:7px 12px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;color:var(--text2);cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .2s;white-space:nowrap}
+.btn-outline:hover{border-color:var(--green2);color:var(--green);background:var(--green-bg)}
+.sb-header{display:flex;align-items:center;justify-content:space-between}
+.sb-header h2{font-family:'Instrument Serif',serif;font-size:22px;font-weight:400}
+.scene-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:1.25rem}
+.scard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);transition:box-shadow .2s,transform .2s}
+.scard:hover{box-shadow:var(--sh-md);transform:translateY(-2px)}
+.scard-visual{aspect-ratio:9/16;background:var(--surface2);position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.scard-visual img{width:100%;height:100%;object-fit:cover;display:block}
+.scard-visual video{width:100%;height:100%;object-fit:cover;display:block}
+.scard-placeholder{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--text3);font-size:12px}
+.scard-placeholder svg{opacity:.3}
+.scard-num{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.55);color:white;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;backdrop-filter:blur(4px);z-index:2}
+.scard-time{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.55);color:white;font-size:10px;padding:2px 8px;border-radius:20px;backdrop-filter:blur(4px);z-index:2}
+.img-overlay{position:absolute;inset:0;background:rgba(245,243,238,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--text2);backdrop-filter:blur(2px);z-index:3}
+.scard-info{padding:11px;display:flex;flex-direction:column;gap:8px}
+.scard-desc{font-size:12px;color:var(--text2);line-height:1.5}
+.nar-wrap{background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden}
+.nar-lbl{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text3);padding:5px 8px 0}
+.nar-text{font-size:12px;font-style:italic;color:var(--text);padding:3px 8px 7px;outline:none;border:none;width:100%;background:transparent;font-family:'DM Sans',sans-serif;resize:none;line-height:1.5}
+.badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;white-space:nowrap;flex-shrink:0}
+.b-wait{background:var(--surface2);color:var(--text3)}
+.b-gen{background:var(--amber-bg);color:var(--amber)}
+.b-ok{background:var(--green-bg);color:var(--green-text)}
+.b-err{background:var(--red-bg);color:var(--red)}
+.card-btns{display:grid;grid-template-columns:1fr 1fr auto auto;gap:5px}
+.btn-c{border:none;border-radius:var(--r-sm);padding:7px 8px;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;transition:opacity .2s,background .2s;white-space:nowrap}
+.btn-c:disabled{opacity:.38;cursor:not-allowed}
+.bc-img{background:var(--green);color:white}
+.bc-img:hover:not(:disabled){background:var(--green2)}
+.bc-vid{background:#18160F;color:white}
+.bc-vid:hover:not(:disabled){opacity:.8}
+.bc-sq{background:var(--surface2);color:var(--text2);border:1px solid var(--border);padding:7px}
+.bc-sq:hover:not(:disabled){background:var(--border)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{width:13px;height:13px;border:2px solid rgba(255,255,255,.3);border-top-color:white;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;flex-shrink:0}
+.spin-dark{border-color:rgba(42,92,69,.2);border-top-color:var(--green)}
+.spin-lg{width:20px;height:20px;border-width:2.5px}
+.toasts{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:7px;z-index:999}
+.toast{background:var(--text);color:white;padding:9px 14px;border-radius:var(--r-sm);font-size:12px;font-weight:500;box-shadow:var(--sh-md);animation:tIn .25s ease;max-width:280px}
+.toast.ok{background:var(--green)}
+.toast.err{background:var(--red)}
+@keyframes tIn{from{transform:translateX(110%);opacity:0}to{transform:none;opacity:1}}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<nav>
+  <div class="logo">Story<em>AI</em></div>
+  <span class="pill">Гиперреализм</span>
+  <span class="spacer"></span>
+  <div class="nav-step">
+    <span class="dot active" id="dot1"></span>
+    <span class="dot" id="dot2"></span>
+    <span class="dot" id="dot3"></span>
+  </div>
+</nav>
+
+<div class="layout">
+<aside class="sidebar">
+
+  <div class="ss">
+    <div class="lbl">Backend</div>
+    <div class="api-grid">
+      <div class="api-row">
+        <span>Server status <span class="api-dot" id="sd-backend"></span></span>
+        <button class="btn-outline" type="button" onclick="testBackend()" id="testBackendBtn" style="width:100%;justify-content:center;">Проверить backend</button>
+      </div>
+      <p class="hint">OpenAI, Segmind и Supabase теперь работают через сервер. API-ключи в сайт вставлять не нужно.</p>
+    </div>
+  </div>
+
+  <div class="ss">
+    <div class="lbl">Персонаж (референс)</div>
+    <div class="char-drop" id="charDrop" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropFiles(event)">
+      <input type="file" id="charInput" accept="image/png,image/jpeg,image/webp,image/jpg" multiple onchange="handleCharFiles(event)">
+      <div class="char-drop-icon">🧑‍🎨</div>
+      <p>Перетащите фото персонажа</p>
+      <small>PNG · JPG · WEBP &nbsp;|&nbsp; до 5 файлов</small>
+    </div>
+    <div class="char-previews" id="charPreviews"></div>
+  </div>
+
+  <div class="ss" style="flex:1">
+    <div class="lbl">Идея</div>
+    <textarea class="idea" id="ideaInput" rows="6" placeholder="Опишите вашу идею...
+
+Пример: 30 секунд. Молодой фотограф идёт по вечернему Токио, находит старую плёночную камеру в антикварной лавке и делает первый кадр."></textarea>
+    <p class="hint">Укажите примерную длительность прямо в идее, например: «30 секунд» или «45 sec». Количество сцен и длительность каждого кадра OpenAI определит сам, чтобы ролик не был сухим и равномерным.</p>
+    <div class="cfg">
+      <select id="imageModel">
+        <option value="nano-banana-pro" selected>Nano Banana Pro</option>
+        <option value="nano-banana">Nano Banana</option>
+      </select>
+      <select id="videoModel">
+        <option value="veo-3.1-fast" selected>Veo 3.1 Fast</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="ss">
+    <button class="btn-main" id="genBtn" onclick="startFlow()">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Создать раскадровку
+    </button>
+  </div>
+
+</aside>
+
+<main class="main" id="mainArea">
+  <div class="prog-wrap hidden" id="progWrap">
+    <div class="prog-label" id="progLabel">Подготовка...</div>
+    <div class="prog-bar"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
+  </div>
+
+  <div class="empty" id="emptyState">
+    <div class="empty-icon">🎬</div>
+    <h2>Готово к работе</h2>
+    <p>Загрузите фото персонажа, опишите идею и нажмите «Создать раскадровку»</p>
+  </div>
+
+  <div id="resultArea" class="hidden" style="display:flex;flex-direction:column;gap:1.5rem">
+    <div class="script-card">
+      <h3>
+        <svg width="14" height="14" fill="none" stroke="var(--green)" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Сценарий
+      </h3>
+      <div class="script-body" id="scriptBody"></div>
+    </div>
+
+    <div class="approve-bar hidden" id="approveBar">
+      <p>Раскадровка готова. Проверьте кадры и реплики.<br><strong>Жмите «Видео» на каждом кадре когда будете готовы.</strong></p>
+      <button class="btn-outline" onclick="exportScript()">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Скачать сценарий
+      </button>
+    </div>
+
+    <div class="sb-header">
+      <h2>Раскадровка</h2>
+    </div>
+    <div class="scene-grid" id="sceneGrid"></div>
+  </div>
+</main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+// ── STATE
+let charImages = [];  // {file, dataUrl, b64, mime, assetUrl}
+let scenes = [];
+let scriptText = '';
+let segmindVerified = false;
+const BACKEND_URL = ''; // пусто = этот же домен. Можно указать Render URL, например: https://your-app.onrender.com
+function api(path){ return (BACKEND_URL || window.location.origin) + path; }
+
+// ── MODEL CONFIG
+// Здесь лежит не один "захардкоженный API", а список моделей.
+// Потом можно спокойно добавить Kling, Runway, HeyGen, Syntx или другие endpoint'ы.
+const AI_MODELS = {
+  image: {
+    'nano-banana-pro': {
+      name: 'Nano Banana Pro',
+      provider: 'Segmind',
+      endpoint: 'https://api.segmind.com/v1/nano-banana-pro',
+      buildBody: ({ prompt, imageUrls }) => ({
+        prompt,
+        image_urls: imageUrls,
+        aspect_ratio: '9:16',
+        output_format: 'png',
+        output_resolution: '2K',
+        response_modalities: 'IMAGE',
+        seed: Math.floor(Math.random() * 999999)
+      })
+    },
+    'nano-banana': {
+      name: 'Nano Banana',
+      provider: 'Segmind',
+      endpoint: 'https://api.segmind.com/v1/nano-banana',
+      buildBody: ({ prompt, imageUrls }) => ({
+        prompt,
+        image_urls: imageUrls,
+        aspect_ratio: '9:16',
+        output_format: 'png',
+        seed: Math.floor(Math.random() * 999999)
+      })
+    }
+  },
+  video: {
+    'veo-3.1-fast': {
+      name: 'Veo 3.1 Fast',
+      provider: 'Segmind',
+      endpoint: 'https://api.segmind.com/v1/veo-3.1-fast',
+      buildBody: ({ prompt, image, duration, lastFrame = null }) => {
+        const body = {
+          prompt,
+          image,
+          duration,
+          aspect_ratio: '9:16',
+          resolution: '1080p',
+          generate_audio: true,
+          seed: Math.floor(Math.random() * 999999)
+        };
+        if (lastFrame) body.last_frame = lastFrame;
+        return body;
+      }
+    }
+  }
+};
+
+// ── UTILS
+function toast(msg, type=''){
+  const c=document.getElementById('toasts');
+  const t=document.createElement('div');
+  t.className='toast'+(type?' '+type:'');
+  t.textContent=msg;
+  c.appendChild(t);
+  setTimeout(()=>t.remove(),4000);
+}
+function prog(pct,lbl){
+  document.getElementById('progFill').style.width=pct+'%';
+  if(lbl) document.getElementById('progLabel').textContent=lbl;
+}
+function setDots(step){
+  for(let i=1;i<=3;i++){
+    const d=document.getElementById('dot'+i);
+    d.className='dot'+(i<step?' done':i===step?' active':'');
+  }
+}
+function markKey(k){
+  const v=document.getElementById(k+'Key').value.trim();
+  document.getElementById('sd-'+k).className='api-dot'+(v.length>10?' ok':'');
+  if(k==='segmind') segmindVerified = false;
+}
+
+async function testBackend(showSuccessToast=true){
+  const btn=document.getElementById('testBackendBtn');
+  if(btn){btn.disabled=true;btn.innerHTML='<div class="spin spin-dark"></div> Проверяю...';}
+  try{
+    const res=await fetch(api('/api/health'));
+    const data=await res.json();
+    if(!res.ok || !data.ok){
+      throw new Error(data.error || ('Не хватает env: '+(data.missing||[]).join(', ')));
+    }
+    document.getElementById('sd-backend').className='api-dot ok';
+    if(showSuccessToast) toast('Backend работает','ok');
+    return true;
+  }catch(err){
+    document.getElementById('sd-backend').className='api-dot';
+    toast('Backend: '+err.message,'err');
+    console.error('Backend health error:',err);
+    return false;
+  }finally{
+    if(btn){btn.disabled=false;btn.innerHTML='Проверить backend';}
+  }
+}
+
+async function testSegmindKey(showSuccessToast=true){ return testBackend(showSuccessToast); }
+async function ensureSegmindVerified(showSuccessToast=false){ return testBackend(showSuccessToast); }
+
+async function uploadSegmindAssets(dataUrls, segKey){
+  if(!dataUrls || !dataUrls.length) return [];
+  const res=await fetch('https://workflows-api.segmind.com/upload-asset',{
+    method:'POST',
+    headers:{
+      'accept':'application/json, text/plain, */*',
+      'Content-Type':'application/json',
+      'x-api-key':segKey
+    },
+    body:JSON.stringify({data_urls:dataUrls})
+  });
+
+  if(!res.ok){
+    let msg=`Segmind upload ${res.status}`;
+    try{
+      const err=await res.json();
+      msg=err?.message||err?.error||JSON.stringify(err)||msg;
+    }catch(_){
+      msg=await res.text().catch(()=>msg);
+    }
+    throw new Error(msg);
+  }
+
+  const data=await res.json();
+  const urls=data.urls||data.output||data.asset_urls||[];
+  if(!Array.isArray(urls) || !urls.length){
+    console.error('Unknown Segmind upload response:',data);
+    throw new Error('Segmind upload: не получил URL загруженных файлов');
+  }
+  return urls;
+}
+
+async function ensureCharacterAssetUrls(segKey){
+  const pending=charImages
+    .map((img,index)=>({img,index}))
+    .filter(item=>!item.img.assetUrl);
+
+  if(!pending.length) return charImages.map(img=>img.assetUrl).filter(Boolean);
+
+  toast('Загружаю референсы персонажа в Segmind Storage...');
+  const urls=await uploadSegmindAssets(pending.map(item=>item.img.dataUrl),segKey);
+  pending.forEach((item,idx)=>{ item.img.assetUrl=urls[idx]; });
+  return charImages.map(img=>img.assetUrl).filter(Boolean);
+}
+
+async function ensureSceneImageAssetUrl(scene,segKey){
+  if(scene.imageAssetUrl) return scene.imageAssetUrl;
+  if(scene.imageUrl && /^https?:\/\//i.test(scene.imageUrl)){
+    scene.imageAssetUrl=scene.imageUrl;
+    return scene.imageAssetUrl;
+  }
+  if(scene.imageB64){
+    const dataUrl=`data:image/png;base64,${scene.imageB64}`;
+    const urls=await uploadSegmindAssets([dataUrl],segKey);
+    scene.imageAssetUrl=urls[0];
+    return scene.imageAssetUrl;
+  }
+  if(scene.imageUrl && scene.imageUrl.startsWith('data:image/')){
+    const urls=await uploadSegmindAssets([scene.imageUrl],segKey);
+    scene.imageAssetUrl=urls[0];
+    return scene.imageAssetUrl;
+  }
+  throw new Error('Нет публичного URL или base64 для картинки кадра');
+}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+
+// ── CHAR UPLOAD
+function dragOver(e){e.preventDefault();document.getElementById('charDrop').classList.add('over')}
+function dragLeave(){document.getElementById('charDrop').classList.remove('over')}
+function dropFiles(e){
+  e.preventDefault();
+  document.getElementById('charDrop').classList.remove('over');
+  processFiles(Array.from(e.dataTransfer.files).filter(f=>f.type.startsWith('image/')));
+}
+function handleCharFiles(e){processFiles(Array.from(e.target.files))}
+
+function processFiles(files){
+  const remaining=5-charImages.length;
+  files.slice(0,remaining).forEach(f=>{
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const dataUrl=ev.target.result;
+      const b64=dataUrl.split(',')[1];
+      charImages.push({file:f,dataUrl,b64,mime:f.type||'image/jpeg'});
+      renderPreviews();
+    };
+    reader.readAsDataURL(f);
+  });
+}
+function renderPreviews(){
+  const c=document.getElementById('charPreviews');
+  c.innerHTML='';
+  charImages.forEach((img,i)=>{
+    const w=document.createElement('div');
+    w.className='char-thumb';
+    w.innerHTML=`<img src="${img.dataUrl}"><button onclick="removeChar(${i})" title="Удалить">×</button>`;
+    c.appendChild(w);
+  });
+}
+function removeChar(i){charImages.splice(i,1);renderPreviews()}
+
+// ── MAIN FLOW
+async function startFlow(){
+  const idea=document.getElementById('ideaInput').value.trim();
+  if(!idea){toast('Опишите идею','err');return}
+  if(!charImages.length){toast('Загрузите хотя бы одно фото персонажа','err');return}
+
+  const backendOk = await testBackend(false);
+  if(!backendOk){toast('Backend не прошёл проверку. Проверьте Render env и деплой.','err');return}
+
+  const btn=document.getElementById('genBtn');
+  btn.disabled=true;
+  btn.innerHTML='<div class="spin"></div> Создаю...';
+
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('resultArea').classList.remove('hidden');
+  document.getElementById('resultArea').style.display='flex';
+  document.getElementById('progWrap').classList.remove('hidden');
+  document.getElementById('sceneGrid').innerHTML='';
+  document.getElementById('scriptBody').textContent='';
+  document.getElementById('approveBar').classList.add('hidden');
+  setDots(1);
+  prog(5,'Анализирую YouTube и создаю сценарий...');
+
+  try{
+    const raw=await callBackendScript(idea);
+    prog(35,'Разбираю сценарий...');
+    const parsed=normalizeBackendScript(raw);
+    scriptText=parsed.script;
+    scenes=parsed.scenes;
+    if(!scenes.length){throw new Error('Сервер не вернул сцены. Попробуйте уточнить идею и запустить снова.')}
+    document.getElementById('scriptBody').textContent=scriptText||'Сценарий сгенерирован.';
+    setDots(2);
+
+    renderSceneCards();
+    const step=55/scenes.length;
+    for(let i=0;i<scenes.length;i++){
+      prog(35+step*i,`Генерирую кадр ${i+1} из ${scenes.length}...`);
+      await generateImage(i,'',false);
+      if(i<scenes.length-1) await sleep(500);
+    }
+
+    prog(100,'Готово!');
+    document.getElementById('approveBar').classList.remove('hidden');
+    setDots(3);
+    toast('Все кадры готовы — редактируйте и запускайте видео!','ok');
+  }catch(err){
+    toast('Ошибка: '+err.message,'err');
+    console.error(err);
+  }finally{
+    btn.disabled=false;
+    btn.innerHTML='<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Создать раскадровку';
+    setTimeout(()=>document.getElementById('progWrap').classList.add('hidden'),3000);
+  }
+}
+
+async function callBackendScript(idea){
+  const model=document.getElementById('openaiModel')?.value || 'gpt-4.1-mini';
+  const res=await fetch(api('/api/generate-script'),{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({idea,model})
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok || !data.ok) throw new Error(data.error || 'Ошибка генерации сценария');
+  return data;
+}
+
+function normalizeBackendScript(data){
+  if(data.parsed && Array.isArray(data.parsed.scenes)){
+    return {
+      script:data.parsed.script || data.parsed.title || data.text || '',
+      scenes:data.parsed.scenes.map((s,idx)=>({
+        num:Number(s.scene || idx+1),
+        time:s.time || '',
+        durationSeconds:Number(s.duration || s.durationSeconds || 6),
+        description:s.visual || s.description || '',
+        imagePrompt:s.imagePrompt || s.prompt || s.visual || 'hyperrealistic cinematic photo',
+        narration:s.narration || s.voiceover || '',
+        videoPrompt:s.videoPrompt || '',
+        onScreenText:s.onScreenText || '',
+        imageUrl:null,imageB64:null,videoUrl:null,status:'pending'
+      }))
+    };
+  }
+  return parseScript(data.text || '');
+}
+
+// ── OPENAI SCRIPT GENERATION WITH HIDDEN YOUTUBE RESEARCH
+function buildPrompt(idea,nChar){
+  return `Ты — профессиональный режиссёр, сценарист коротких вертикальных видео и аналитик YouTube Shorts.
+
+ТВОЯ ВНУТРЕННЯЯ ЗАДАЧА, КОТОРУЮ НЕЛЬЗЯ ПОКАЗЫВАТЬ В ОТВЕТЕ:
+1. Перед созданием сценария используй web search и исследуй YouTube по теме идеи пользователя.
+2. Ищи похожие видео, Shorts, обзоры, реакции, UGC-ролики и обучающие видео.
+3. Приоритет — видео, где в публичных данных, сниппете, описании или поисковой выдаче видна популярность от 100 000 просмотров.
+4. Если точное число просмотров найти нельзя, используй только явно популярные и релевантные результаты, но не выдумывай конкретные цифры.
+5. На основе найденного сделай внутренние выводы: какие хуки повторяются, какой конфликт в начале, какая структура удержания, какой темп, какой визуальный паттерн, какая подача лучше всего работает.
+6. Не копируй чужие формулировки, названия и сценарии. Используй только best practices и создай оригинальную раскадровку.
+7. В финальном ответе НЕ показывай research, ссылки, аналитику, источники, просмотры и выводы. Research должен остаться внутри рассуждения. Пользователь должен увидеть только готовый сценарий и сцены в заданном формате.
+
+ИДЕЯ ПОЛЬЗОВАТЕЛЯ:
+${idea}
+
+ПЕРСОНАЖ: Пользователь загрузил ${nChar} референсных фото. Этот персонаж в каждой сцене. Сохраняй внешность точно. Меняй одежду, позу, окружение, эмоции по сценарию.
+
+СТИЛЬ: строгий гиперреализм, кинематографическая фотография. Никакой анимации.
+
+ТРЕБОВАНИЯ К ДЛИТЕЛЬНОСТИ И МОНТАЖУ:
+- Сам определи оптимальное количество сцен по идее пользователя.
+- Если пользователь указал примерную длительность ролика, ориентируйся на неё.
+- Если длительность не указана, сделай ролик примерно на 30 секунд.
+- Количество сцен должно быть естественным для короткого вертикального ролика: обычно 5-10 сцен.
+- Длительность сцен должна быть разной, не делай все сцены одинаковыми.
+- Допускай короткие сцены 1.5-3 секунды для хуков, реакций и быстрых перебивок.
+- Допускай более длинные сцены 4-7 секунд для объяснений, демонстрации и эмоционального акцента.
+- Не ставь больше двух сцен подряд с одинаковой длительностью.
+- Суммарная длительность всех сцен должна быть близка к целевой длительности ролика.
+- Ритм должен быть живым: быстрый старт, смена визуала до того, как кадр становится скучным, финальная сцена с понятным выводом или CTA.
+
+ТРЕБОВАНИЯ К СЦЕНАРИЮ:
+- Формат: короткое вертикальное видео для рекомендаций.
+- В первые 1-2 секунды должен быть сильный хук.
+- Должен быть понятный визуальный конфликт или интрига.
+- Каждая сцена должна быть простой для генерации кадра и видео.
+- Реплики должны звучать естественно для американской аудитории, если идея предполагает английский язык.
+- Не делай инфоцыганский тон, не используй чрезмерно рекламные формулировки.
+
+ФИНАЛЬНЫЙ ОТВЕТ СТРОГО В ЭТОМ ФОРМАТЕ:
+
+СЦЕНАРИЙ: (2-3 предложения). Укажи примерную общую длительность ролика в тексте сценария.
+
+Затем сцены СТРОГО в этом формате:
+
+СЦЕНА [N]:
+ВРЕМЯ: [начало]-[конец]с
+ДЛИТЕЛЬНОСТЬ: [число]с
+ОПИСАНИЕ: [Что происходит в кадре, 1-2 предложения]
+ПРОМПТ: [Английский промпт для фотогенерации. Описывай: действие персонажа, одежду, окружение, освещение, угол камеры, глубину резкости. 50-70 слов. НЕ описывай лицо — оно задано референсом.]
+РЕПЛИКА: [Слова персонажа или закадровый текст. Если тишина — напиши: молчание]
+
+Больше ничего после последней сцены.`;
+}
+
+async function callOpenAI(key,prompt){
+  const model=document.getElementById('openaiModel')?.value || 'gpt-4.1-mini';
+
+  const res=await fetch('https://api.openai.com/v1/responses',{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'Authorization':'Bearer '+key
+    },
+    body:JSON.stringify({
+      model,
+      tools:[
+        {
+          type:'web_search'
+        }
+      ],
+      input:[
+        {
+          role:'system',
+          content:'Ты профессиональный режиссёр, сценарист коротких вертикальных видео и аналитик YouTube. Используй web search для скрытого ресерча, но в финальном ответе возвращай только сценарий и сцены в формате пользователя. Без markdown, без ссылок, без источников, без research-блока.'
+        },
+        {
+          role:'user',
+          content:prompt
+        }
+      ],
+      max_output_tokens:4500
+    })
+  });
+
+  if(!res.ok){
+    const errorText=await res.text().catch(()=>'');
+    let message='OpenAI API '+res.status;
+    try{
+      const parsed=JSON.parse(errorText);
+      message=parsed.error?.message || message;
+    }catch(_){
+      if(errorText) message=message+': '+errorText.slice(0,300);
+    }
+    throw new Error(message);
+  }
+
+  const d=await res.json();
+
+  if(d.output_text) return d.output_text;
+
+  if(Array.isArray(d.output)){
+    const text=d.output
+      .flatMap(item => Array.isArray(item.content) ? item.content : [])
+      .map(part => part.text || part.content || '')
+      .join('')
+      .trim();
+    if(text) return text;
+  }
+
+  console.error('OpenAI unknown response:', d);
+  throw new Error('OpenAI вернул неожиданный формат ответа. Проверьте консоль.');
+}
+
+// ── PARSE
+function parseScript(text){
+  const scriptM=text.match(/СЦЕНАРИЙ:\s*([\s\S]*?)(?=СЦЕНА\s*1\s*:)/i);
+  const script=scriptM?scriptM[1].trim():'';
+  const blocks=text.split(/(?=СЦЕНА\s*\d+\s*:)/i).filter(b=>/СЦЕНА\s*\d+/i.test(b));
+  const scenes=blocks.map(b=>{
+    const num=(b.match(/СЦЕНА\s*(\d+)/i)||[])[1];
+    const time=(b.match(/ВРЕМЯ:\s*([^\n]+)/i)||[])[1]||'';
+    const desc=(b.match(/ОПИСАНИЕ:\s*([\s\S]*?)(?=ПРОМПТ:|РЕПЛИКА:|СЦЕНА\s*\d|$)/i)||[])[1]||'';
+    const prm=(b.match(/ПРОМПТ:\s*([\s\S]*?)(?=РЕПЛИКА:|ОПИСАНИЕ:|СЦЕНА\s*\d|$)/i)||[])[1]||'hyperrealistic cinematic photo';
+    const rep=(b.match(/РЕПЛИКА:\s*([\s\S]*?)(?=СЦЕНА\s*\d|$)/i)||[])[1]||'';
+    const cleanRep=rep.trim().replace(/^молчание$/i,'');
+    const duration=(b.match(/ДЛИТЕЛЬНОСТЬ:\s*([0-9]+(?:[\.,][0-9]+)?)/i)||[])[1]||'';
+    const durationSeconds=parseSceneDuration(time.trim(), duration);
+    return{num:parseInt(num)||0,time:time.trim(),durationSeconds,description:desc.trim(),imagePrompt:prm.trim(),narration:cleanRep,imageUrl:null,imageB64:null,videoUrl:null,status:'pending'};
+  }).filter(s=>s.num>0);
+  return{script,scenes};
+}
+
+
+function parseSceneDuration(timeText, explicitDuration){
+  const direct=String(explicitDuration||'').replace(',', '.').match(/[0-9]+(?:\.[0-9]+)?/);
+  if(direct) return Math.max(1, Number(direct[0]));
+
+  const nums=String(timeText||'').replace(',', '.').match(/[0-9]+(?:\.[0-9]+)?/g);
+  if(nums && nums.length>=2){
+    const start=Number(nums[0]);
+    const end=Number(nums[1]);
+    if(Number.isFinite(start) && Number.isFinite(end) && end>start){
+      return Math.max(1, +(end-start).toFixed(1));
+    }
+  }
+
+  return 6;
+}
+
+function nearestVeoDuration(seconds){
+  const allowed=[4,6,8];
+  const n=Number(seconds)||6;
+  return allowed.reduce((best,current)=>Math.abs(current-n)<Math.abs(best-n)?current:best, allowed[0]);
+}
+
+// ── RENDER CARDS
+function renderSceneCards(){
+  const grid=document.getElementById('sceneGrid');
+  grid.innerHTML='';
+  scenes.forEach((_,i)=>grid.appendChild(buildCard(i)));
+}
+
+function buildCard(i){
+  const s=scenes[i];
+  const div=document.createElement('div');
+  div.className='scard';
+  div.id='scard-'+i;
+  div.innerHTML=`
+    <div class="scard-visual" id="sv-${i}">
+      <div class="scard-placeholder" id="sph-${i}">
+        <svg width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        <span>Генерация...</span>
+      </div>
+      <span class="scard-num">Кадр ${s.num}</span>
+      <span class="scard-time">${s.time}${s.durationSeconds ? ` · ${s.durationSeconds}с` : ``}</span>
+    </div>
+    <div class="scard-info">
+      <div style="display:flex;align-items:flex-start;gap:7px;justify-content:space-between">
+        <span class="scard-desc">${s.description}</span>
+        <span class="badge b-wait" id="badge-${i}">Ожидание</span>
+      </div>
+      <div class="nar-wrap">
+        <div class="nar-lbl">💬 Реплика</div>
+        <textarea class="nar-text" id="nar-${i}" rows="2">${s.narration||'(тишина)'}</textarea>
+      </div>
+      <div class="card-btns">
+        <button class="btn-c bc-img" id="bi-${i}" onclick="regenImage(${i})" title="Перегенерировать картинку">
+          <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg>
+          Перегенерировать
+        </button>
+        <button class="btn-c bc-vid" id="bv-${i}" onclick="generateVideo(${i})" disabled>
+          <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Сгенерировать видео
+        </button>
+        <button class="btn-c bc-sq" id="bdl-${i}" onclick="downloadItem(${i})" disabled title="Скачать">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+        <button class="btn-c bc-sq" onclick="copyPrompt(${i})" title="Скопировать промпт">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
+    </div>
+  `;
+  return div;
+}
+
+function setBadge(i,status){
+  const b=document.getElementById('badge-'+i);
+  if(!b) return;
+  const map={pending:'b-wait|Ожидание',generating:'b-gen|Генерация',done:'b-ok|Готово',error:'b-err|Ошибка'};
+  const [cls,txt]=(map[status]||'b-wait|Ожидание').split('|');
+  b.className='badge '+cls;b.textContent=txt;
+  if(scenes[i]) scenes[i].status=status;
+}
+
+// ── IMAGE GEN через backend
+async function generateImage(i,segKey='',isRegen=true){
+  const s=scenes[i];
+  setBadge(i,'generating');
+  const bi=document.getElementById('bi-'+i);
+  const vis=document.getElementById('sv-'+i);
+  if(bi){bi.disabled=true;bi.innerHTML='<div class="spin spin-dark"></div> Генерирую...'}
+
+  const ov=document.createElement('div');
+  ov.className='img-overlay';
+  ov.innerHTML='<div class="spin spin-lg spin-dark"></div><span>Генерирую кадр...</span>';
+  if(vis) vis.appendChild(ov);
+
+  try{
+    const imageModelId=document.getElementById('imageModel')?.value || 'nano-banana-pro';
+    const res=await fetch(api('/api/generate-image'),{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:imageModelId,
+        prompt:buildImgPrompt(s),
+        referenceImages:charImages.map(c=>c.dataUrl),
+        aspectRatio:'9:16',
+        outputResolution:'1K'
+      })
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok) throw new Error(data.error || 'Ошибка генерации картинки');
+
+    scenes[i].imageUrl=data.url;
+    scenes[i].imageB64=null;
+    scenes[i].imageAssetUrl=data.url;
+    ov.remove();
+
+    const ph=document.getElementById('sph-'+i);
+    if(ph) ph.style.display='none';
+    vis.querySelectorAll('img').forEach(e=>e.remove());
+    const img=document.createElement('img');
+    img.src=data.url;
+    img.alt='Кадр '+(i+1);
+    vis.insertBefore(img,vis.firstChild);
+
+    setBadge(i,'done');
+    const bv=document.getElementById('bv-'+i);
+    const bdl=document.getElementById('bdl-'+i);
+    if(bv) bv.disabled=false;
+    if(bdl) bdl.disabled=false;
+    if(isRegen) toast('Кадр '+(i+1)+' перегенерирован','ok');
+  }catch(err){
+    ov.remove();
+    setBadge(i,'error');
+    toast('Кадр '+(i+1)+': '+err.message,'err');
+    console.error('Image gen error:',err);
+  }finally{
+    if(bi){
+      bi.disabled=false;
+      bi.innerHTML='<svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg> Перегенерировать';
+    }
+  }
+}
+
+function buildImgPrompt(s){
+  return `Hyperrealistic cinematic photograph. The person from the reference images must appear exactly as shown — preserve their facial features, skin, hair, body proportions precisely.
+
+Scene action: ${s.imagePrompt}
+
+Technical: shot on Sony A7R IV, 85mm f/1.4 lens, shallow depth of field, natural cinematic lighting, ultra-sharp detail, 9:16 vertical frame, photorealistic skin texture, no CGI, no illustration, real photography quality.`;
+}
+
+function regenImage(i){generateImage(i,'',true)}
+
+// ── VIDEO GEN через backend
+async function generateVideo(i){
+  const s=scenes[i];
+  if(!s.imageUrl){toast('Сначала нужна картинка для кадра','err');return}
+
+  const bv=document.getElementById('bv-'+i);
+  bv.disabled=true;
+  bv.innerHTML='<div class="spin"></div> Создаю видео...';
+  setBadge(i,'generating');
+
+  const vis=document.getElementById('sv-'+i);
+  const ov=document.createElement('div');
+  ov.className='img-overlay';
+  ov.innerHTML='<div class="spin spin-lg spin-dark"></div><span>Veo 3.1 генерирует видео...</span><span style="font-size:10px;color:var(--text3)">~1-2 минуты</span>';
+  if(vis) vis.appendChild(ov);
+
+  try{
+    const narration=document.getElementById('nar-'+i)?.value||'';
+    const dur=nearestVeoDuration(s.durationSeconds || 6);
+    const videoModelId=document.getElementById('videoModel')?.value || 'veo-3.1-fast';
+
+    const res=await fetch(api('/api/generate-video'),{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:videoModelId,
+        prompt:buildVideoPrompt(s,narration),
+        image:s.imageUrl,
+        duration:dur,
+        aspectRatio:'9:16',
+        resolution:'1080p',
+        generateAudio:true
+      })
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok) throw new Error(data.error || 'Ошибка генерации видео');
+
+    ov.remove();
+    scenes[i].videoUrl=data.url;
+
+    vis.querySelectorAll('video').forEach(e=>e.remove());
+    const vid=document.createElement('video');
+    vid.src=data.url;vid.controls=true;vid.loop=true;vid.playsinline=true;
+    vid.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1';
+    vis.appendChild(vid);
+
+    setBadge(i,'done');
+    document.getElementById('bdl-'+i).disabled=false;
+    toast('Видео кадра '+(i+1)+' готово!','ok');
+  }catch(err){
+    ov.remove();
+    setBadge(i,'error');
+    toast('Видео '+(i+1)+': '+err.message,'err');
+    console.error('Video gen error:',err);
+  }finally{
+    bv.disabled=false;
+    bv.innerHTML='<svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg> Сгенерировать видео';
+  }
+}
+
+function buildVideoPrompt(s,narration){
+  let p=`Hyperrealistic cinematic video for a scene planned to last about ${s.durationSeconds || 6} seconds. ${s.imagePrompt} Smooth natural movement, cinematic camera motion, photorealistic lighting, 9:16 vertical format.`;
+  if(narration&&narration!=='(тишина)') p+=` Character interaction: "${narration}"`;
+  return p;
+}
+
+async function pollJob(sKey,jobId,attempt=0){
+  if(attempt>50) throw new Error('Таймаут генерации видео (>2.5 мин)');
+  await sleep(3000);
+  const res=await fetch(`https://api.segmind.com/v1/status/${jobId}`,{headers:{'x-api-key':sKey}});
+  if(!res.ok) throw new Error('Poll '+res.status);
+  const d=await res.json();
+  if(d.status==='completed'||d.status==='done'||d.status==='success')
+    return d.video_url||d.url||d.output;
+  if(d.status==='failed'||d.status==='error') throw new Error('Veo: задача завершилась ошибкой');
+  return pollJob(sKey,jobId,attempt+1);
+}
+
+// ── DOWNLOAD
+function downloadItem(i){
+  const s=scenes[i];
+  const url=s.videoUrl||s.imageUrl;
+  if(!url){toast('Нет файла','err');return}
+  const ext=s.videoUrl?'mp4':'png';
+  const a=document.createElement('a');
+  a.href=url;a.download=`storyai-scene-${s.num}.${ext}`;a.click();
+  toast('Кадр '+s.num+' скачан','ok');
+}
+
+function copyPrompt(i){
+  navigator.clipboard.writeText(scenes[i]?.imagePrompt||'').then(()=>toast('Промпт скопирован'));
+}
+
+// ── EXPORT
+function exportScript(){
+  if(!scenes.length){toast('Нет данных','err');return}
+  let txt='СЦЕНАРИЙ\n'+'─'.repeat(40)+'\n\n'+scriptText+'\n\n';
+  txt+='РАСКАДРОВКА\n'+'─'.repeat(40)+'\n\n';
+  scenes.forEach(s=>{
+    txt+=`Кадр ${s.num} [${s.time}]\n`;
+    txt+=`Длительность: ${s.durationSeconds||'—'}с\n`;
+    txt+=`Описание: ${s.description}\n`;
+    txt+=`Реплика: ${s.narration||'—'}\n`;
+    txt+=`Промпт: ${s.imagePrompt}\n\n`;
+  });
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([txt],{type:'text/plain;charset=utf-8'}));
+  a.download='storyai-script.txt';a.click();
+  toast('Сценарий скачан','ok');
+}
+
+// ── SIMPLE INTERNAL TESTS
+function runInternalChecks(){
+  console.assert(AI_MODELS.image['nano-banana-pro'].endpoint.includes('nano-banana-pro'), 'Nano Banana Pro endpoint is missing');
+  console.assert(AI_MODELS.image['nano-banana'].endpoint.includes('nano-banana'), 'Nano Banana endpoint is missing');
+  console.assert(AI_MODELS.video['veo-3.1-fast'].endpoint.includes('veo-3.1-fast'), 'Veo 3.1 Fast endpoint is missing');
+  console.assert(typeof callBackendScript === 'function', 'Backend script function is missing');
+  console.assert(buildPrompt('test idea', 4, 1).includes('web search'), 'Hidden research prompt is missing');
+  console.assert(buildPrompt('test idea', 4, 1).includes('YouTube'), 'YouTube research instruction is missing');
+}
+runInternalChecks();
+
+// ── HELPERS
+function blobToB64(blob){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=e=>res(e.target.result.split(',')[1]);
+    r.onerror=rej;
+    r.readAsDataURL(blob);
+  });
+}
+</script>
+</body>
+</html>
