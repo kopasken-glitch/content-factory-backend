@@ -502,22 +502,36 @@ async function callBackendScript(idea){
 }
 
 function normalizeBackendScript(data){
-  if(data.parsed && Array.isArray(data.parsed.scenes)){
+  let payload = data || {};
+
+  if(Array.isArray(payload.scenes)){
+    // v3 backend: scenes are returned at the top level
+  } else if(payload.parsed && Array.isArray(payload.parsed.scenes)){
+    payload = payload.parsed;
+  } else if(typeof payload.text === 'string'){
+    try{
+      const parsedText = JSON.parse(payload.text);
+      if(parsedText && Array.isArray(parsedText.scenes)) payload = parsedText;
+    }catch(_){}
+  }
+
+  if(Array.isArray(payload.scenes)){
     return {
-      script:data.parsed.script || data.parsed.title || data.text || '',
-      scenes:data.parsed.scenes.map((s,idx)=>({
-        num:Number(s.scene || idx+1),
+      script:payload.script || payload.title || data.text || '',
+      scenes:payload.scenes.map((s,idx)=>({
+        num:Number(s.scene || s.number || idx+1),
         time:s.time || '',
-        durationSeconds:Number(s.duration || s.durationSeconds || 6),
+        durationSeconds:Number(s.duration || s.durationSeconds || s.seconds || 6),
         description:s.visual || s.description || '',
-        imagePrompt:s.imagePrompt || s.prompt || s.visual || 'hyperrealistic cinematic photo',
-        narration:s.narration || s.voiceover || '',
-        videoPrompt:s.videoPrompt || '',
-        onScreenText:s.onScreenText || '',
+        imagePrompt:s.imagePrompt || s.image_prompt || s.prompt || s.visual || 'hyperrealistic cinematic photo',
+        narration:s.narration || s.voiceover || s.line || '',
+        videoPrompt:s.videoPrompt || s.video_prompt || s.motionPrompt || '',
+        onScreenText:s.onScreenText || s.on_screen_text || s.text || '',
         imageUrl:null,imageB64:null,videoUrl:null,status:'pending'
-      }))
+      })).filter(s=>s.imagePrompt || s.description || s.narration)
     };
   }
+
   return parseScript(data.text || '');
 }
 
