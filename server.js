@@ -14,7 +14,7 @@ const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 const PORT = process.env.PORT || 10000;
-const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'content-assets';
+const SUPABASE_BUCKET = String(process.env.SUPABASE_BUCKET || 'content-assets').trim().replace(/^\/+|\/+$/g, '');
 
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: '80mb' }));
@@ -41,6 +41,27 @@ function safeExtFromMime(mime = '') {
   return 'bin';
 }
 
+function sanitizeStorageSegment(value = 'uploads') {
+  return String(value || 'uploads')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\\/g, '/')
+    .replace(/[^a-zA-Z0-9/_-]/g, '-')
+    .replace(/\/+/g, '/')
+    .replace(/^-+|-+$/g, '') || 'uploads';
+}
+
+function normalizeStoragePath(filePath) {
+  return String(filePath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+/g, '/')
+    .split('/')
+    .map((part) => part.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '') || 'file')
+    .join('/');
+}
+
 function dataUrlToBuffer(dataUrl) {
   const match = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
   if (!match) throw new Error('Invalid data URL');
@@ -57,14 +78,23 @@ function buildPublicUrl(filePath) {
 
 async function uploadBufferToSupabase(buffer, mimeType, folder = 'uploads') {
   const ext = safeExtFromMime(mimeType);
-  const filePath = `${folder}/${new Date().toISOString().slice(0, 10)}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const safeFolder = sanitizeStorageSegment(folder);
+  const dateFolder = new Date().toISOString().slice(0, 10);
+  const fileName = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const filePath = normalizeStoragePath(`${safeFolder}/${dateFolder}/${fileName}`);
+
+  if (!filePath || filePath.startsWith('/') || filePath.includes('//')) {
+    throw new Error(`Invalid normalized Supabase path: ${filePath}`);
+  }
 
   const { error } = await supabase.storage.from(SUPABASE_BUCKET).upload(filePath, buffer, {
     contentType: mimeType || 'application/octet-stream',
-    upsert: false
+    upsert: true
   });
 
-  if (error) throw new Error(`Supabase upload error: ${error.message}`);
+  if (error) {
+    throw new Error(`Supabase upload error: ${error.message}. bucket=${SUPABASE_BUCKET}; path=${filePath}`);
+  }
 
   return {
     path: filePath,
@@ -201,7 +231,7 @@ app.get('/api/health', async (req, res) => {
       missing,
       bucket: SUPABASE_BUCKET,
       service: 'content-factory-backend',
-      version: 'v4-openai-fallback-scenes'
+      version: 'v5-supabase-path-fix'
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
@@ -437,7 +467,7 @@ Return strictly this JSON shape:
 
     res.json({
       ok: true,
-      version: 'v4-openai-fallback-scenes',
+      version: 'v5-supabase-path-fix',
       title: parsed.title,
       totalDuration: parsed.totalDuration,
       script: parsed.script,
