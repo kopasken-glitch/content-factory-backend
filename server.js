@@ -16,6 +16,24 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 const PORT = process.env.PORT || 10000;
 const SUPABASE_BUCKET = String(process.env.SUPABASE_BUCKET || 'content-assets').trim().replace(/^\/+|\/+$/g, '');
 
+const CREATORS = {
+  michael: { slug: 'michael', name: 'Майкл' },
+  sara: { slug: 'sara', name: 'Сара' },
+  rob: { slug: 'rob', name: 'Роб' },
+  emily: { slug: 'emily', name: 'Эмили' }
+};
+
+function normalizeCreatorSlug(value = 'michael') {
+  const slug = String(value || 'michael').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  return CREATORS[slug] ? slug : 'michael';
+}
+
+function creatorFolder(creatorSlug, assetType = 'uploads') {
+  const slug = normalizeCreatorSlug(creatorSlug);
+  const type = sanitizeStorageSegment(assetType || 'uploads');
+  return `creators/${slug}/${type}`;
+}
+
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: '80mb' }));
 app.use(express.urlencoded({ extended: true, limit: '80mb' }));
@@ -78,22 +96,14 @@ function buildPublicUrl(filePath) {
 
 async function uploadBufferToSupabase(buffer, mimeType, folder = 'uploads') {
   const ext = safeExtFromMime(mimeType);
-  const safeFolder = sanitizeStorageSegment(folder).replace(/\//g, '-');
+  const safeFolder = sanitizeStorageSegment(folder);
   const dateFolder = new Date().toISOString().slice(0, 10);
-
-  const filePath = normalizeStoragePath(
-    `${safeFolder}-${dateFolder}-${Date.now()}-${crypto.randomUUID()}.${ext}`
-  ).replace(/\//g, '-');
+  const fileName = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const filePath = normalizeStoragePath(`${safeFolder}/${dateFolder}/${fileName}`);
 
   if (!filePath || filePath.startsWith('/') || filePath.includes('//')) {
     throw new Error(`Invalid normalized Supabase path: ${filePath}`);
   }
-
-  console.log('Uploading to Supabase:', {
-    bucket: SUPABASE_BUCKET,
-    path: filePath,
-    mimeType
-  });
 
   const { error } = await supabase.storage.from(SUPABASE_BUCKET).upload(filePath, buffer, {
     contentType: mimeType || 'application/octet-stream',
@@ -229,6 +239,124 @@ function normalizeStoryboardPayload(payload, fallbackText = '') {
   };
 }
 
+
+function normalizeChatRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    creatorId: row.creator_id,
+    creatorName: row.creator_name,
+    idea: row.idea,
+    script: row.script || '',
+    scenes: row.scenes || [],
+    assets: row.assets || {},
+    status: row.status || 'draft',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+async function createChatRecord({ title, creatorSlug, creatorName, idea, script = '', scenes = [], assets = {}, status = 'draft' }) {
+  const selectedCreatorSlug = normalizeCreatorSlug(creatorSlug);
+  const selectedCreatorName = creatorName || CREATORS[selectedCreatorSlug]?.name || selectedCreatorSlug;
+  const { data, error } = await supabase
+    .from('chats')
+    .insert({
+      title: title || String(idea || 'Untitled chat').slice(0, 80) || 'Untitled chat',
+      creator_id: selectedCreatorSlug,
+      creator_name: selectedCreatorName,
+      idea: idea || '',
+      script: script || '',
+      scenes: Array.isArray(scenes) ? scenes : [],
+      assets: assets && typeof assets === 'object' ? assets : {},
+      status
+    })
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Supabase chats insert error: ${error.message}`);
+  return normalizeChatRow(data);
+}
+
+async function updateChatRecord(id, payload = {}) {
+  const update = { updated_at: new Date().toISOString() };
+  if (payload.title !== undefined) update.title = payload.title;
+  if (payload.creatorSlug !== undefined) update.creator_id = normalizeCreatorSlug(payload.creatorSlug);
+  if (payload.creatorName !== undefined) update.creator_name = payload.creatorName;
+  if (payload.idea !== undefined) update.idea = payload.idea;
+  if (payload.script !== undefined) update.script = payload.script;
+  if (payload.scenes !== undefined) update.scenes = Array.isArray(payload.scenes) ? payload.scenes : [];
+  if (payload.assets !== undefined) update.assets = payload.assets && typeof payload.assets === 'object' ? payload.assets : {};
+  if (payload.status !== undefined) update.status = payload.status;
+
+  const { data, error } = await supabase
+    .from('chats')
+    .update(update)
+    .eq('id', id)
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Supabase chats update error: ${error.message}`);
+  return normalizeChatRow(data);
+}
+
+app.get('/api/chats', async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit || 30), 1), 100);
+    const creatorSlug = req.query.creatorSlug ? normalizeCreatorSlug(req.query.creatorSlug) : null;
+    let query = supabase
+      .from('chats')
+      .select('id,title,creator_id,creator_name,idea,status,created_at,updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+    if (creatorSlug) query = query.eq('creator_id', creatorSlug);
+    const { data, error } = await query;
+    if (error) throw new Error(`Supabase chats list error: ${error.message}`);
+    res.json({ ok: true, chats: (data || []).map(normalizeChatRow) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/chats/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('chats').select('*').eq('id', req.params.id).single();
+    if (error) throw new Error(`Supabase chat read error: ${error.message}`);
+    res.json({ ok: true, chat: normalizeChatRow(data) });
+  } catch (error) {
+    res.status(404).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/chats', async (req, res) => {
+  try {
+    const chat = await createChatRecord(req.body || {});
+    res.json({ ok: true, chat });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.patch('/api/chats/:id', async (req, res) => {
+  try {
+    const chat = await updateChatRecord(req.params.id, req.body || {});
+    res.json({ ok: true, chat });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.delete('/api/chats/:id', async (req, res) => {
+  try {
+    const { error } = await supabase.from('chats').delete().eq('id', req.params.id);
+    if (error) throw new Error(`Supabase chat delete error: ${error.message}`);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.get('/api/health', async (req, res) => {
   try {
     const missing = ['OPENAI_API_KEY', 'SEGMIND_API_KEY', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_BUCKET']
@@ -239,7 +367,8 @@ app.get('/api/health', async (req, res) => {
       missing,
       bucket: SUPABASE_BUCKET,
       service: 'content-factory-backend',
-      version: 'v5-supabase-path-fix'
+      version: 'v7-chats-autosave',
+      creators: Object.values(CREATORS)
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
@@ -249,13 +378,15 @@ app.get('/api/health', async (req, res) => {
 app.post('/api/upload-image', upload.single('file'), async (req, res) => {
   try {
     if (req.file) {
-      const uploaded = await uploadBufferToSupabase(req.file.buffer, req.file.mimetype, req.body.folder || 'uploads');
+      const creatorSlug = normalizeCreatorSlug(req.body.creatorSlug || req.body.creator || 'michael');
+      const assetType = req.body.assetType || req.body.folder || 'uploads';
+      const uploaded = await uploadBufferToSupabase(req.file.buffer, req.file.mimetype, creatorFolder(creatorSlug, assetType));
       return res.json({ ok: true, ...uploaded });
     }
 
-    const { dataUrl, folder = 'uploads' } = req.body;
+    const { dataUrl, folder = 'uploads', assetType, creatorSlug = 'michael' } = req.body;
     const { buffer, mimeType } = dataUrlToBuffer(dataUrl);
-    const uploaded = await uploadBufferToSupabase(buffer, mimeType, folder);
+    const uploaded = await uploadBufferToSupabase(buffer, mimeType, creatorFolder(creatorSlug, assetType || folder));
     res.json({ ok: true, ...uploaded });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
@@ -264,7 +395,9 @@ app.post('/api/upload-image', upload.single('file'), async (req, res) => {
 
 app.post('/api/generate-script', async (req, res) => {
   try {
-    const { idea, model = 'gpt-4.1-mini' } = req.body;
+    const { idea, model = 'gpt-4.1-mini', creatorSlug = 'michael', creatorName } = req.body;
+    const selectedCreatorSlug = normalizeCreatorSlug(creatorSlug);
+    const selectedCreatorName = creatorName || CREATORS[selectedCreatorSlug]?.name || selectedCreatorSlug;
     if (!idea) return res.status(400).json({ ok: false, error: 'Idea is required' });
 
     const schema = {
@@ -300,6 +433,9 @@ app.post('/api/generate-script', async (req, res) => {
     const system = 'You are a senior short-form UGC scriptwriter and storyboard director for US social video. You always return strict JSON only.';
     const userPrompt = `
 Create a short vertical UGC video storyboard for a US audience.
+
+Selected AI blogger / character: ${selectedCreatorName} (${selectedCreatorSlug}).
+All visual references uploaded by the user belong to this character, so keep continuity with that character.
 
 User idea:
 ${idea}
@@ -475,7 +611,8 @@ Return strictly this JSON shape:
 
     res.json({
       ok: true,
-      version: 'v5-supabase-path-fix',
+      version: 'v7-chats-autosave',
+      creator: CREATORS[selectedCreatorSlug],
       title: parsed.title,
       totalDuration: parsed.totalDuration,
       script: parsed.script,
@@ -496,14 +633,17 @@ app.post('/api/generate-image', async (req, res) => {
       referenceImages = [],
       model = 'nano-banana-pro',
       aspectRatio = '9:16',
-      outputResolution = '1K'
+      outputResolution = '1K',
+      creatorSlug = 'michael'
     } = req.body;
+
+    const selectedCreatorSlug = normalizeCreatorSlug(creatorSlug);
 
     if (!prompt) return res.status(400).json({ ok: false, error: 'Prompt is required' });
 
     const referenceUrls = [];
     for (const img of referenceImages) {
-      referenceUrls.push(await ensurePublicImageUrl(img, 'references'));
+      referenceUrls.push(await ensurePublicImageUrl(img, creatorFolder(selectedCreatorSlug, 'references')));
     }
 
     const endpoint = `https://api.segmind.com/v1/${model}`;
@@ -519,18 +659,18 @@ app.post('/api/generate-image', async (req, res) => {
     const result = await segmindPost(endpoint, body);
 
     if (result.type === 'binary') {
-      const uploaded = await uploadBufferToSupabase(result.buffer, result.contentType || 'image/png', 'generated-images');
-      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, referenceUrls });
+      const uploaded = await uploadBufferToSupabase(result.buffer, result.contentType || 'image/png', creatorFolder(selectedCreatorSlug, 'generated-images'));
+      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, referenceUrls, creator: CREATORS[selectedCreatorSlug] });
     }
 
     const url = extractUrlFromJson(result.data);
-    if (url) return res.json({ ok: true, url, raw: result.data, referenceUrls });
+    if (url) return res.json({ ok: true, url, raw: result.data, referenceUrls, creator: CREATORS[selectedCreatorSlug] });
 
     const b64 = extractBase64FromJson(result.data);
     if (b64) {
       const buffer = Buffer.from(b64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-      const uploaded = await uploadBufferToSupabase(buffer, 'image/png', 'generated-images');
-      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, raw: result.data, referenceUrls });
+      const uploaded = await uploadBufferToSupabase(buffer, 'image/png', creatorFolder(selectedCreatorSlug, 'generated-images'));
+      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, raw: result.data, referenceUrls, creator: CREATORS[selectedCreatorSlug] });
     }
 
     throw new Error('Unknown Segmind image response format');
@@ -548,13 +688,16 @@ app.post('/api/generate-video', async (req, res) => {
       model = 'veo-3.1-fast',
       aspectRatio = '9:16',
       resolution = '1080p',
-      generateAudio = true
+      generateAudio = true,
+      creatorSlug = 'michael'
     } = req.body;
+
+    const selectedCreatorSlug = normalizeCreatorSlug(creatorSlug);
 
     if (!prompt) return res.status(400).json({ ok: false, error: 'Prompt is required' });
     if (!image) return res.status(400).json({ ok: false, error: 'Image URL or data URL is required' });
 
-    const imageUrl = await ensurePublicImageUrl(image, 'video-inputs');
+    const imageUrl = await ensurePublicImageUrl(image, creatorFolder(selectedCreatorSlug, 'video-inputs'));
     const endpoint = `https://api.segmind.com/v1/${model}`;
     const body = {
       prompt,
@@ -569,22 +712,22 @@ app.post('/api/generate-video', async (req, res) => {
     const result = await segmindPost(endpoint, body);
 
     if (result.type === 'binary') {
-      const uploaded = await uploadBufferToSupabase(result.buffer, result.contentType || 'video/mp4', 'generated-videos');
-      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, imageUrl });
+      const uploaded = await uploadBufferToSupabase(result.buffer, result.contentType || 'video/mp4', creatorFolder(selectedCreatorSlug, 'generated-videos'));
+      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, imageUrl, creator: CREATORS[selectedCreatorSlug] });
     }
 
     const url = extractUrlFromJson(result.data);
-    if (url) return res.json({ ok: true, url, raw: result.data, imageUrl });
+    if (url) return res.json({ ok: true, url, raw: result.data, imageUrl, creator: CREATORS[selectedCreatorSlug] });
 
     const b64 = extractBase64FromJson(result.data);
     if (b64) {
       const buffer = Buffer.from(b64.replace(/^data:video\/\w+;base64,/, ''), 'base64');
-      const uploaded = await uploadBufferToSupabase(buffer, 'video/mp4', 'generated-videos');
-      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, raw: result.data, imageUrl });
+      const uploaded = await uploadBufferToSupabase(buffer, 'video/mp4', creatorFolder(selectedCreatorSlug, 'generated-videos'));
+      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, raw: result.data, imageUrl, creator: CREATORS[selectedCreatorSlug] });
     }
 
     if (result.data?.id || result.data?.job_id) {
-      return res.json({ ok: true, jobId: result.data.id || result.data.job_id, raw: result.data, imageUrl });
+      return res.json({ ok: true, jobId: result.data.id || result.data.job_id, raw: result.data, imageUrl, creator: CREATORS[selectedCreatorSlug] });
     }
 
     throw new Error('Unknown Segmind video response format');
