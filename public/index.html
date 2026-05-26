@@ -115,6 +115,17 @@ textarea.idea::placeholder{color:var(--text3)}
 .toast.ok{background:var(--green)}
 .toast.err{background:var(--red)}
 @keyframes tIn{from{transform:translateX(110%);opacity:0}to{transform:none;opacity:1}}
+
+.chat-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.chat-toolbar .btn-outline{flex:1;justify-content:center}
+.chat-list{display:flex;flex-direction:column;gap:7px;max-height:230px;overflow:auto;padding-right:2px}
+.chat-item{border:1px solid var(--border);background:var(--bg);border-radius:var(--r-sm);padding:9px 10px;cursor:pointer;transition:all .2s}
+.chat-item:hover{border-color:var(--green2);background:var(--green-bg)}
+.chat-item.active{border-color:var(--green);background:var(--green-bg)}
+.chat-title{font-size:12px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-meta{font-size:10px;color:var(--text3);margin-top:2px;display:flex;justify-content:space-between;gap:8px}
+.chat-empty{font-size:11px;color:var(--text3);line-height:1.5;padding:8px 0}
+
 .hidden{display:none!important}
 </style>
 </head>
@@ -142,6 +153,31 @@ textarea.idea::placeholder{color:var(--text3)}
       </div>
       <p class="hint">OpenAI, Segmind и Supabase теперь работают через сервер. API-ключи в сайт вставлять не нужно.</p>
     </div>
+  </div>
+
+  <div class="ss">
+    <div class="lbl">Чаты</div>
+    <div class="chat-toolbar">
+      <button class="btn-outline" type="button" onclick="newChat()">Новый чат</button>
+      <button class="btn-outline" type="button" onclick="loadChats()" title="Обновить">↻</button>
+    </div>
+    <div class="chat-list" id="chatList">
+      <div class="chat-empty">Сохранённые раскадровки появятся здесь.</div>
+    </div>
+  </div>
+
+  <div class="ss">
+    <div class="lbl">Блогер</div>
+    <div class="api-row">
+      <span>Для кого делаем ролик</span>
+      <select id="creatorSelect" onchange="updateCreatorHint()">
+        <option value="michael" selected>Майкл</option>
+        <option value="sara">Сара</option>
+        <option value="rob">Роб</option>
+        <option value="emily">Эмили</option>
+      </select>
+    </div>
+    <p class="hint" id="creatorFolderHint">Материалы будут сохранены в папку: creators/michael/</p>
   </div>
 
   <div class="ss">
@@ -225,9 +261,194 @@ textarea.idea::placeholder{color:var(--text3)}
 let charImages = [];  // {file, dataUrl, b64, mime, assetUrl}
 let scenes = [];
 let scriptText = '';
+let currentChatId = null;
+let chats = [];
 let segmindVerified = false;
+const CREATORS = {
+  michael: { slug:'michael', name:'Майкл', folder:'creators/michael/' },
+  sara: { slug:'sara', name:'Сара', folder:'creators/sara/' },
+  rob: { slug:'rob', name:'Роб', folder:'creators/rob/' },
+  emily: { slug:'emily', name:'Эмили', folder:'creators/emily/' }
+};
+function getSelectedCreator(){
+  const slug = document.getElementById('creatorSelect')?.value || 'michael';
+  return CREATORS[slug] || CREATORS.michael;
+}
+function updateCreatorHint(){
+  const c = getSelectedCreator();
+  const el = document.getElementById('creatorFolderHint');
+  if(el) el.textContent = `Материалы будут сохранены в папку: ${c.folder}`;
+}
 const BACKEND_URL = ''; // пусто = этот же домен. Можно указать Render URL, например: https://your-app.onrender.com
 function api(path){ return (BACKEND_URL || window.location.origin) + path; }
+
+function formatChatDate(value){
+  if(!value) return '';
+  try{
+    return new Date(value).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+  }catch(_){return ''}
+}
+
+function renderChatList(){
+  const el=document.getElementById('chatList');
+  if(!el) return;
+  if(!chats.length){
+    el.innerHTML='<div class="chat-empty">Сохранённые раскадровки появятся здесь.</div>';
+    return;
+  }
+  el.innerHTML=chats.map(c=>`
+    <div class="chat-item ${c.id===currentChatId?'active':''}" onclick="openChat('${c.id}')">
+      <div class="chat-title">${escapeHtml(c.title||'Untitled chat')}</div>
+      <div class="chat-meta"><span>${escapeHtml(c.creatorName||c.creatorId||'')}</span><span>${formatChatDate(c.updatedAt||c.createdAt)}</span></div>
+    </div>
+  `).join('');
+}
+
+async function loadChats(){
+  try{
+    const res=await fetch(api('/api/chats?limit=50'));
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok) throw new Error(data.error || 'Не удалось загрузить чаты');
+    chats=data.chats||[];
+    renderChatList();
+  }catch(err){
+    console.error('Chats load error:',err);
+    const el=document.getElementById('chatList');
+    if(el) el.innerHTML='<div class="chat-empty">Не удалось загрузить чаты.</div>';
+  }
+}
+
+function newChat(){
+  currentChatId=null;
+  scenes=[];
+  scriptText='';
+  document.getElementById('ideaInput').value='';
+  document.getElementById('scriptBody').textContent='';
+  document.getElementById('sceneGrid').innerHTML='';
+  document.getElementById('resultArea').classList.add('hidden');
+  document.getElementById('resultArea').style.display='none';
+  document.getElementById('emptyState').classList.remove('hidden');
+  document.getElementById('approveBar').classList.add('hidden');
+  renderChatList();
+  toast('Новый чат создан');
+}
+
+async function createChatFromStoryboard(idea, payload){
+  const creator=getSelectedCreator();
+  const res=await fetch(api('/api/chats'),{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      title:(payload.title || idea || 'Untitled chat').slice(0,80),
+      creatorSlug:creator.slug,
+      creatorName:creator.name,
+      idea,
+      script:scriptText,
+      scenes,
+      assets:{references:charImages.map(c=>({name:c.file?.name||'', mime:c.mime||'', dataUrl:c.dataUrl||''}))},
+      status:'storyboard'
+    })
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok || !data.ok) throw new Error(data.error || 'Не удалось сохранить чат');
+  currentChatId=data.chat.id;
+  await loadChats();
+  return data.chat;
+}
+
+async function saveCurrentChat(status='updated'){
+  if(!currentChatId) return;
+  const creator=getSelectedCreator();
+  try{
+    const res=await fetch(api('/api/chats/'+currentChatId),{
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        creatorSlug:creator.slug,
+        creatorName:creator.name,
+        idea:document.getElementById('ideaInput').value.trim(),
+        script:scriptText,
+        scenes,
+        assets:{references:charImages.map(c=>({name:c.file?.name||'', mime:c.mime||'', dataUrl:c.dataUrl||''}))},
+        status
+      })
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok) throw new Error(data.error || 'Не удалось обновить чат');
+    await loadChats();
+  }catch(err){
+    console.error('Chat save error:',err);
+    toast('Чат не сохранился: '+err.message,'err');
+  }
+}
+
+async function openChat(id){
+  try{
+    const res=await fetch(api('/api/chats/'+id));
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok) throw new Error(data.error || 'Не удалось открыть чат');
+    const chat=data.chat;
+    currentChatId=chat.id;
+    if(chat.creatorId && CREATORS[chat.creatorId]) document.getElementById('creatorSelect').value=chat.creatorId;
+    updateCreatorHint();
+loadChats();
+    document.getElementById('ideaInput').value=chat.idea||'';
+    scriptText=chat.script||'';
+    scenes=(chat.scenes||[]).map((s,idx)=>({
+      num:Number(s.num || s.scene || idx+1),
+      time:s.time || '',
+      durationSeconds:Number(s.durationSeconds || s.duration || 6),
+      description:s.description || s.visual || '',
+      imagePrompt:s.imagePrompt || s.image_prompt || s.prompt || '',
+      narration:s.narration || s.voiceover || '',
+      videoPrompt:s.videoPrompt || s.video_prompt || '',
+      onScreenText:s.onScreenText || s.on_screen_text || '',
+      imageUrl:s.imageUrl || s.imageAssetUrl || null,
+      imageB64:null,
+      videoUrl:s.videoUrl || null,
+      status:s.status || (s.imageUrl?'done':'pending')
+    }));
+    document.getElementById('emptyState').classList.add('hidden');
+    document.getElementById('resultArea').classList.remove('hidden');
+    document.getElementById('resultArea').style.display='flex';
+    document.getElementById('scriptBody').textContent=scriptText||'Сценарий сгенерирован.';
+    document.getElementById('approveBar').classList.remove('hidden');
+    renderSceneCards();
+    scenes.forEach((s,i)=>restoreSceneMedia(i));
+    renderChatList();
+    toast('Чат открыт','ok');
+  }catch(err){
+    toast('Ошибка открытия чата: '+err.message,'err');
+    console.error('Open chat error:',err);
+  }
+}
+
+function restoreSceneMedia(i){
+  const s=scenes[i];
+  const vis=document.getElementById('sv-'+i);
+  if(!vis) return;
+  const ph=document.getElementById('sph-'+i);
+  if(s.imageUrl){
+    if(ph) ph.style.display='none';
+    const img=document.createElement('img');
+    img.src=s.imageUrl;
+    img.alt='Кадр '+(i+1);
+    vis.insertBefore(img,vis.firstChild);
+    const bv=document.getElementById('bv-'+i); if(bv) bv.disabled=false;
+    const bdl=document.getElementById('bdl-'+i); if(bdl) bdl.disabled=false;
+  }
+  if(s.videoUrl){
+    const vid=document.createElement('video');
+    vid.src=s.videoUrl;vid.controls=true;vid.loop=true;vid.playsinline=true;
+    vid.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1';
+    vis.appendChild(vid);
+  }
+  setBadge(i,s.status || (s.imageUrl?'done':'pending'));
+}
+
+function escapeHtml(value){
+  return String(value||'').replace(/[&<>'"]/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+}
 
 // ── MODEL CONFIG
 // Здесь лежит не один "захардкоженный API", а список моделей.
@@ -437,6 +658,9 @@ function removeChar(i){charImages.splice(i,1);renderPreviews()}
 // ── MAIN FLOW
 async function startFlow(){
   const idea=document.getElementById('ideaInput').value.trim();
+  const creator=getSelectedCreator();
+  updateCreatorHint();
+loadChats();
   if(!idea){toast('Опишите идею','err');return}
   if(!charImages.length){toast('Загрузите хотя бы одно фото персонажа','err');return}
 
@@ -455,7 +679,7 @@ async function startFlow(){
   document.getElementById('scriptBody').textContent='';
   document.getElementById('approveBar').classList.add('hidden');
   setDots(1);
-  prog(5,'Анализирую YouTube и создаю сценарий...');
+  prog(5,`Анализирую YouTube и создаю сценарий для ${creator.name}...`);
 
   try{
     const raw=await callBackendScript(idea);
@@ -466,6 +690,13 @@ async function startFlow(){
     if(!scenes.length){throw new Error('Сервер не вернул сцены. Попробуйте уточнить идею и запустить снова.')}
     document.getElementById('scriptBody').textContent=scriptText||'Сценарий сгенерирован.';
     setDots(2);
+    try{
+      await createChatFromStoryboard(idea, raw);
+      toast('Чат сохранён','ok');
+    }catch(saveErr){
+      console.error('Initial chat save error:', saveErr);
+      toast('Раскадровка создана, но чат не сохранился: '+saveErr.message,'err');
+    }
 
     renderSceneCards();
     const step=55/scenes.length;
@@ -491,10 +722,11 @@ async function startFlow(){
 
 async function callBackendScript(idea){
   const model=document.getElementById('openaiModel')?.value || 'gpt-4.1-mini';
+  const creator=getSelectedCreator();
   const res=await fetch(api('/api/generate-script'),{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({idea,model})
+    body:JSON.stringify({idea,model,creatorSlug:creator.slug,creatorName:creator.name})
   });
   const data=await res.json().catch(()=>({}));
   if(!res.ok || !data.ok) throw new Error(data.error || 'Ошибка генерации сценария');
@@ -767,6 +999,7 @@ async function generateImage(i,segKey='',isRegen=true){
 
   try{
     const imageModelId=document.getElementById('imageModel')?.value || 'nano-banana-pro';
+    const creator=getSelectedCreator();
     const res=await fetch(api('/api/generate-image'),{
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -775,7 +1008,9 @@ async function generateImage(i,segKey='',isRegen=true){
         prompt:buildImgPrompt(s),
         referenceImages:charImages.map(c=>c.dataUrl),
         aspectRatio:'9:16',
-        outputResolution:'1K'
+        outputResolution:'1K',
+        creatorSlug:creator.slug,
+        creatorName:creator.name
       })
     });
     const data=await res.json().catch(()=>({}));
@@ -799,6 +1034,7 @@ async function generateImage(i,segKey='',isRegen=true){
     const bdl=document.getElementById('bdl-'+i);
     if(bv) bv.disabled=false;
     if(bdl) bdl.disabled=false;
+    await saveCurrentChat('images');
     if(isRegen) toast('Кадр '+(i+1)+' перегенерирован','ok');
   }catch(err){
     ov.remove();
@@ -843,6 +1079,7 @@ async function generateVideo(i){
     const narration=document.getElementById('nar-'+i)?.value||'';
     const dur=nearestVeoDuration(s.durationSeconds || 6);
     const videoModelId=document.getElementById('videoModel')?.value || 'veo-3.1-fast';
+    const creator=getSelectedCreator();
 
     const res=await fetch(api('/api/generate-video'),{
       method:'POST',
@@ -854,7 +1091,9 @@ async function generateVideo(i){
         duration:dur,
         aspectRatio:'9:16',
         resolution:'1080p',
-        generateAudio:true
+        generateAudio:true,
+        creatorSlug:creator.slug,
+        creatorName:creator.name
       })
     });
     const data=await res.json().catch(()=>({}));
@@ -871,6 +1110,7 @@ async function generateVideo(i){
 
     setBadge(i,'done');
     document.getElementById('bdl-'+i).disabled=false;
+    await saveCurrentChat('videos');
     toast('Видео кадра '+(i+1)+' готово!','ok');
   }catch(err){
     ov.remove();
@@ -908,7 +1148,8 @@ function downloadItem(i){
   if(!url){toast('Нет файла','err');return}
   const ext=s.videoUrl?'mp4':'png';
   const a=document.createElement('a');
-  a.href=url;a.download=`storyai-scene-${s.num}.${ext}`;a.click();
+  const creator=getSelectedCreator();
+  a.href=url;a.download=`${creator.slug}-scene-${s.num}.${ext}`;a.click();
   toast('Кадр '+s.num+' скачан','ok');
 }
 
@@ -919,7 +1160,9 @@ function copyPrompt(i){
 // ── EXPORT
 function exportScript(){
   if(!scenes.length){toast('Нет данных','err');return}
-  let txt='СЦЕНАРИЙ\n'+'─'.repeat(40)+'\n\n'+scriptText+'\n\n';
+  const creator=getSelectedCreator();
+  let txt=`ПЕРСОНАЖ: ${creator.name} (${creator.slug})\nПАПКА: ${creator.folder}\n\n`;
+  txt+='СЦЕНАРИЙ\n'+'─'.repeat(40)+'\n\n'+scriptText+'\n\n';
   txt+='РАСКАДРОВКА\n'+'─'.repeat(40)+'\n\n';
   scenes.forEach(s=>{
     txt+=`Кадр ${s.num} [${s.time}]\n`;
@@ -930,7 +1173,7 @@ function exportScript(){
   });
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([txt],{type:'text/plain;charset=utf-8'}));
-  a.download='storyai-script.txt';a.click();
+  a.download=`${creator.slug}-storyai-script.txt`;a.click();
   toast('Сценарий скачан','ok');
 }
 
@@ -940,10 +1183,13 @@ function runInternalChecks(){
   console.assert(AI_MODELS.image['nano-banana'].endpoint.includes('nano-banana'), 'Nano Banana endpoint is missing');
   console.assert(AI_MODELS.video['veo-3.1-fast'].endpoint.includes('veo-3.1-fast'), 'Veo 3.1 Fast endpoint is missing');
   console.assert(typeof callBackendScript === 'function', 'Backend script function is missing');
+  console.assert(CREATORS.michael && CREATORS.sara && CREATORS.rob && CREATORS.emily, 'Creators config is missing');
   console.assert(buildPrompt('test idea', 4, 1).includes('web search'), 'Hidden research prompt is missing');
   console.assert(buildPrompt('test idea', 4, 1).includes('YouTube'), 'YouTube research instruction is missing');
 }
 runInternalChecks();
+updateCreatorHint();
+loadChats();
 
 // ── HELPERS
 function blobToB64(blob){
