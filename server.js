@@ -16,6 +16,10 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 const PORT = process.env.PORT || 10000;
 const SUPABASE_BUCKET = String(process.env.SUPABASE_BUCKET || 'content-assets').trim().replace(/^\/+|\/+$/g, '');
 
+const GLOBAL_IMAGE_STYLE = `
+Shot on iPhone 13, casual UGC smartphone aesthetic, natural lighting, realistic phone-camera exposure, non-cinematic, non-editorial, non-commercial, no Hollywood look, no dramatic contrast, no shallow depth of field, no heavy background blur, background mostly in focus, everyday social-media framing, slightly imperfect composition, authentic handheld feel.
+`.trim();
+
 const CREATORS = {
   michael: { slug: 'michael', name: 'Майкл' },
   sara: { slug: 'sara', name: 'Сара' },
@@ -239,7 +243,6 @@ function normalizeStoryboardPayload(payload, fallbackText = '') {
   };
 }
 
-
 function normalizeChatRow(row) {
   if (!row) return null;
   return {
@@ -257,9 +260,60 @@ function normalizeChatRow(row) {
   };
 }
 
+function removeHeavyValues(value) {
+  if (Array.isArray(value)) return value.map(removeHeavyValues).filter((item) => item !== undefined);
+
+  if (value && typeof value === 'object') {
+    const out = {};
+
+    for (const [key, val] of Object.entries(value)) {
+      if (typeof val === 'string') {
+        if (val.startsWith('data:image')) continue;
+        if (val.startsWith('data:video')) continue;
+        if (val.startsWith('blob:')) continue;
+
+        out[key] = val.length > 5000 ? val.slice(0, 5000) : val;
+      } else {
+        const cleaned = removeHeavyValues(val);
+        if (cleaned !== undefined) out[key] = cleaned;
+      }
+    }
+
+    return out;
+  }
+
+  return value;
+}
+
+function cleanSceneForDb(scene = {}, index = 0) {
+  return {
+    scene: Number(scene.scene || scene.number || index + 1),
+    duration: Number(scene.duration || scene.durationSeconds || scene.seconds || 6),
+    narration: String(scene.narration || scene.voiceover || scene.line || '').slice(0, 3000),
+    visual: String(scene.visual || scene.description || '').slice(0, 3000),
+    imagePrompt: String(scene.imagePrompt || scene.image_prompt || scene.prompt || '').slice(0, 6000),
+    videoPrompt: String(scene.videoPrompt || scene.video_prompt || scene.motionPrompt || '').slice(0, 6000),
+    onScreenText: String(scene.onScreenText || scene.on_screen_text || scene.text || '').slice(0, 1000),
+    imageUrl: typeof scene.imageUrl === 'string' && scene.imageUrl.startsWith('http') ? scene.imageUrl : null,
+    videoUrl: typeof scene.videoUrl === 'string' && scene.videoUrl.startsWith('http') ? scene.videoUrl : null,
+    status: String(scene.status || 'draft').slice(0, 80),
+    error: scene.error ? String(scene.error).slice(0, 800) : null
+  };
+}
+
+function cleanScenesForDb(scenes) {
+  return Array.isArray(scenes) ? scenes.map(cleanSceneForDb) : [];
+}
+
+function cleanAssetsForDb(assets = {}) {
+  const cleaned = removeHeavyValues(assets && typeof assets === 'object' ? assets : {});
+  return cleaned && typeof cleaned === 'object' ? cleaned : {};
+}
+
 async function createChatRecord({ title, creatorSlug, creatorName, idea, script = '', scenes = [], assets = {}, status = 'draft' }) {
   const selectedCreatorSlug = normalizeCreatorSlug(creatorSlug);
   const selectedCreatorName = creatorName || CREATORS[selectedCreatorSlug]?.name || selectedCreatorSlug;
+
   const { data, error } = await supabase
     .from('chats')
     .insert({
@@ -268,8 +322,8 @@ async function createChatRecord({ title, creatorSlug, creatorName, idea, script 
       creator_name: selectedCreatorName,
       idea: idea || '',
       script: script || '',
-      scenes: Array.isArray(scenes) ? scenes : [],
-      assets: assets && typeof assets === 'object' ? assets : {},
+      scenes: cleanScenesForDb(scenes),
+      assets: cleanAssetsForDb(assets),
       status
     })
     .select('*')
@@ -281,13 +335,14 @@ async function createChatRecord({ title, creatorSlug, creatorName, idea, script 
 
 async function updateChatRecord(id, payload = {}) {
   const update = { updated_at: new Date().toISOString() };
+
   if (payload.title !== undefined) update.title = payload.title;
   if (payload.creatorSlug !== undefined) update.creator_id = normalizeCreatorSlug(payload.creatorSlug);
   if (payload.creatorName !== undefined) update.creator_name = payload.creatorName;
   if (payload.idea !== undefined) update.idea = payload.idea;
   if (payload.script !== undefined) update.script = payload.script;
-  if (payload.scenes !== undefined) update.scenes = Array.isArray(payload.scenes) ? payload.scenes : [];
-  if (payload.assets !== undefined) update.assets = payload.assets && typeof payload.assets === 'object' ? payload.assets : {};
+  if (payload.scenes !== undefined) update.scenes = cleanScenesForDb(payload.scenes);
+  if (payload.assets !== undefined) update.assets = cleanAssetsForDb(payload.assets);
   if (payload.status !== undefined) update.status = payload.status;
 
   const { data, error } = await supabase
@@ -305,14 +360,18 @@ app.get('/api/chats', async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit || 30), 1), 100);
     const creatorSlug = req.query.creatorSlug ? normalizeCreatorSlug(req.query.creatorSlug) : null;
+
     let query = supabase
       .from('chats')
       .select('id,title,creator_id,creator_name,idea,status,created_at,updated_at')
       .order('updated_at', { ascending: false })
       .limit(limit);
+
     if (creatorSlug) query = query.eq('creator_id', creatorSlug);
+
     const { data, error } = await query;
     if (error) throw new Error(`Supabase chats list error: ${error.message}`);
+
     res.json({ ok: true, chats: (data || []).map(normalizeChatRow) });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
@@ -323,6 +382,7 @@ app.get('/api/chats/:id', async (req, res) => {
   try {
     const { data, error } = await supabase.from('chats').select('*').eq('id', req.params.id).single();
     if (error) throw new Error(`Supabase chat read error: ${error.message}`);
+
     res.json({ ok: true, chat: normalizeChatRow(data) });
   } catch (error) {
     res.status(404).json({ ok: false, error: error.message });
@@ -351,6 +411,7 @@ app.delete('/api/chats/:id', async (req, res) => {
   try {
     const { error } = await supabase.from('chats').delete().eq('id', req.params.id);
     if (error) throw new Error(`Supabase chat delete error: ${error.message}`);
+
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
@@ -367,7 +428,7 @@ app.get('/api/health', async (req, res) => {
       missing,
       bucket: SUPABASE_BUCKET,
       service: 'content-factory-backend',
-      version: 'v7-chats-autosave',
+      version: 'v8-ugc-style-chats-clean',
       creators: Object.values(CREATORS)
     });
   } catch (error) {
@@ -381,12 +442,14 @@ app.post('/api/upload-image', upload.single('file'), async (req, res) => {
       const creatorSlug = normalizeCreatorSlug(req.body.creatorSlug || req.body.creator || 'michael');
       const assetType = req.body.assetType || req.body.folder || 'uploads';
       const uploaded = await uploadBufferToSupabase(req.file.buffer, req.file.mimetype, creatorFolder(creatorSlug, assetType));
+
       return res.json({ ok: true, ...uploaded });
     }
 
     const { dataUrl, folder = 'uploads', assetType, creatorSlug = 'michael' } = req.body;
     const { buffer, mimeType } = dataUrlToBuffer(dataUrl);
     const uploaded = await uploadBufferToSupabase(buffer, mimeType, creatorFolder(creatorSlug, assetType || folder));
+
     res.json({ ok: true, ...uploaded });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
@@ -398,6 +461,7 @@ app.post('/api/generate-script', async (req, res) => {
     const { idea, model = 'gpt-4.1-mini', creatorSlug = 'michael', creatorName } = req.body;
     const selectedCreatorSlug = normalizeCreatorSlug(creatorSlug);
     const selectedCreatorName = creatorName || CREATORS[selectedCreatorSlug]?.name || selectedCreatorSlug;
+
     if (!idea) return res.status(400).json({ ok: false, error: 'Idea is required' });
 
     const schema = {
@@ -431,6 +495,7 @@ app.post('/api/generate-script', async (req, res) => {
     };
 
     const system = 'You are a senior short-form UGC scriptwriter and storyboard director for US social video. You always return strict JSON only.';
+
     const userPrompt = `
 Create a short vertical UGC video storyboard for a US audience.
 
@@ -451,7 +516,15 @@ Rules:
 - Usually use 5-10 scenes for 25-45 seconds.
 - First 1-3 seconds must be a strong hook.
 - Keep scenes simple enough for image/video generation.
-- imagePrompt must be in English and must describe: action, environment, outfit, camera angle, lighting, mood, depth of field. Do not describe exact facial identity because reference images define the character.
+- imagePrompt must be in English and must describe: action, environment, outfit, camera angle, lighting, mood, and focus.
+- All image prompts must look like casual UGC content shot on an iPhone 13.
+- The image style must be realistic but not cinematic, not glossy, and not hyper-stylized.
+- Do not create a Hollywood, editorial, movie-like, or dramatic cinematic look.
+- Do not use shallow depth of field or strong background blur.
+- Keep the background mostly in focus, with a natural smartphone camera look.
+- Use natural lighting, realistic exposure, slightly imperfect framing, and an authentic social-media feel.
+- The result should feel like a normal person filmed it on a phone, not like a commercial production.
+- imagePrompt must not describe exact facial identity because reference images define the character.
 - videoPrompt must describe camera movement and subject motion for the same scene.
 
 Return strictly this JSON shape:
@@ -489,6 +562,7 @@ Return strictly this JSON shape:
           }
         }
       };
+
       if (useSearch) body.tools = [{ type: 'web_search_preview' }];
 
       const response = await fetch('https://api.openai.com/v1/responses', {
@@ -501,11 +575,14 @@ Return strictly this JSON shape:
       });
 
       const data = await response.json().catch(async () => ({ rawText: await response.text().catch(() => '') }));
+
       if (!response.ok) {
         throw new Error(`OpenAI Responses ${response.status}: ${JSON.stringify(data).slice(0, 1200)}`);
       }
+
       const text = parseOpenAIText(data);
       const parsed = normalizeStoryboardPayload(extractJsonObject(text), text);
+
       return { parsed, text, raw: data };
     }
 
@@ -533,12 +610,16 @@ Return strictly this JSON shape:
           }
         })
       });
+
       const data = await response.json().catch(async () => ({ rawText: await response.text().catch(() => '') }));
+
       if (!response.ok) {
         throw new Error(`OpenAI Chat ${response.status}: ${JSON.stringify(data).slice(0, 1200)}`);
       }
+
       const text = data.choices?.[0]?.message?.content || '';
       const parsed = normalizeStoryboardPayload(extractJsonObject(text), text);
+
       return { parsed, text, raw: data };
     }
 
@@ -550,29 +631,33 @@ Return strictly this JSON shape:
       const scale = total / sum;
       const finalDurations = durations.map((d) => Math.max(2, Math.round(d * scale)));
       const base = String(ideaText).replace(/\s+/g, ' ').trim();
+
       const beats = [
         ['I used to think this was the smart move.', 'A close, direct-to-camera hook with a slightly concerned expression.'],
         ['But the problem is, most people skip the boring step that actually protects them.', 'The creator gestures toward a notebook and laptop on a kitchen counter.'],
         ['Before I invest money, I want a small emergency fund sitting there first.', 'Close-up of hands writing a simple money plan in a notebook.'],
         ['Because one surprise bill can force you to sell at the worst possible time.', 'The creator points at a simple downward chart on a laptop screen.'],
         ['So my rule is simple: protect the basics, then build long term.', 'Medium shot, calm explanation, clean home workspace.'],
-        ['If you want, start tiny. Even one week of expenses is better than zero.', 'Close-up of phone calculator and notebook checklist.'],
+        ['Start tiny. Even one week of expenses is better than zero.', 'Close-up of phone calculator and notebook checklist.'],
         ['That is how investing stops feeling like gambling.', 'Final direct-to-camera shot with a clear, grounded CTA energy.']
       ];
+
       const scenes = finalDurations.map((duration, i) => {
         const [narration, visual] = beats[i] || beats[beats.length - 1];
+
         return normalizeSceneObject({
           scene: i + 1,
           duration,
           narration,
           visual,
-          imagePrompt: `Photorealistic vertical UGC frame. ${visual} Based on the user's topic: ${base}. Modern realistic home interior, natural daylight, casual outfit, iPhone-style composition, shallow depth of field, non-glossy authentic social media look.`,
-          videoPrompt: `Subtle handheld camera movement. The creator performs the action naturally: ${visual}. Realistic motion, no dramatic effects, UGC style.`,
+          imagePrompt: `Photorealistic vertical UGC frame. ${visual} Based on the user's topic: ${base}. Shot on iPhone 13, casual smartphone composition, background mostly in focus, natural phone-camera exposure, non-cinematic, non-glossy authentic social media look.`,
+          videoPrompt: `Subtle handheld smartphone camera movement. The creator performs the action naturally: ${visual}. Realistic motion, no dramatic effects, UGC style.`,
           onScreenText: i === 0 ? 'Don’t skip this step' : ''
         }, i);
       });
+
       return {
-        title: 'UGC financial explainer',
+        title: 'UGC explainer',
         totalDuration: scenes.reduce((sum, s) => sum + s.duration, 0),
         script: scenes.map((s) => s.narration).join(' '),
         scenes
@@ -589,9 +674,16 @@ Return strictly this JSON shape:
       ['chat_completions_schema', () => callChatCompletionsWithSchema()]
     ]) {
       const [name, fn] = attempt;
+
       try {
         const result = await fn();
-        attempts.push({ name, ok: Boolean(result.parsed), textPreview: String(result.text || '').slice(0, 300) });
+
+        attempts.push({
+          name,
+          ok: Boolean(result.parsed),
+          textPreview: String(result.text || '').slice(0, 300)
+        });
+
         if (result.parsed) {
           parsed = result.parsed;
           text = result.text;
@@ -611,7 +703,7 @@ Return strictly this JSON shape:
 
     res.json({
       ok: true,
-      version: 'v7-chats-autosave',
+      version: 'v8-ugc-style-chats-clean',
       creator: CREATORS[selectedCreatorSlug],
       title: parsed.title,
       totalDuration: parsed.totalDuration,
@@ -641,6 +733,11 @@ app.post('/api/generate-image', async (req, res) => {
 
     if (!prompt) return res.status(400).json({ ok: false, error: 'Prompt is required' });
 
+    const finalPrompt = `${prompt}
+
+Global image style:
+${GLOBAL_IMAGE_STYLE}`;
+
     const referenceUrls = [];
     for (const img of referenceImages) {
       referenceUrls.push(await ensurePublicImageUrl(img, creatorFolder(selectedCreatorSlug, 'references')));
@@ -648,7 +745,7 @@ app.post('/api/generate-image', async (req, res) => {
 
     const endpoint = `https://api.segmind.com/v1/${model}`;
     const body = {
-      prompt,
+      prompt: finalPrompt,
       image_urls: referenceUrls,
       aspect_ratio: aspectRatio,
       output_format: 'png',
@@ -660,17 +757,40 @@ app.post('/api/generate-image', async (req, res) => {
 
     if (result.type === 'binary') {
       const uploaded = await uploadBufferToSupabase(result.buffer, result.contentType || 'image/png', creatorFolder(selectedCreatorSlug, 'generated-images'));
-      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, referenceUrls, creator: CREATORS[selectedCreatorSlug] });
+
+      return res.json({
+        ok: true,
+        url: uploaded.url,
+        path: uploaded.path,
+        referenceUrls,
+        creator: CREATORS[selectedCreatorSlug]
+      });
     }
 
     const url = extractUrlFromJson(result.data);
-    if (url) return res.json({ ok: true, url, raw: result.data, referenceUrls, creator: CREATORS[selectedCreatorSlug] });
+    if (url) {
+      return res.json({
+        ok: true,
+        url,
+        raw: result.data,
+        referenceUrls,
+        creator: CREATORS[selectedCreatorSlug]
+      });
+    }
 
     const b64 = extractBase64FromJson(result.data);
     if (b64) {
       const buffer = Buffer.from(b64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
       const uploaded = await uploadBufferToSupabase(buffer, 'image/png', creatorFolder(selectedCreatorSlug, 'generated-images'));
-      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, raw: result.data, referenceUrls, creator: CREATORS[selectedCreatorSlug] });
+
+      return res.json({
+        ok: true,
+        url: uploaded.url,
+        path: uploaded.path,
+        raw: result.data,
+        referenceUrls,
+        creator: CREATORS[selectedCreatorSlug]
+      });
     }
 
     throw new Error('Unknown Segmind image response format');
@@ -699,6 +819,7 @@ app.post('/api/generate-video', async (req, res) => {
 
     const imageUrl = await ensurePublicImageUrl(image, creatorFolder(selectedCreatorSlug, 'video-inputs'));
     const endpoint = `https://api.segmind.com/v1/${model}`;
+
     const body = {
       prompt,
       image: imageUrl,
@@ -713,21 +834,50 @@ app.post('/api/generate-video', async (req, res) => {
 
     if (result.type === 'binary') {
       const uploaded = await uploadBufferToSupabase(result.buffer, result.contentType || 'video/mp4', creatorFolder(selectedCreatorSlug, 'generated-videos'));
-      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, imageUrl, creator: CREATORS[selectedCreatorSlug] });
+
+      return res.json({
+        ok: true,
+        url: uploaded.url,
+        path: uploaded.path,
+        imageUrl,
+        creator: CREATORS[selectedCreatorSlug]
+      });
     }
 
     const url = extractUrlFromJson(result.data);
-    if (url) return res.json({ ok: true, url, raw: result.data, imageUrl, creator: CREATORS[selectedCreatorSlug] });
+    if (url) {
+      return res.json({
+        ok: true,
+        url,
+        raw: result.data,
+        imageUrl,
+        creator: CREATORS[selectedCreatorSlug]
+      });
+    }
 
     const b64 = extractBase64FromJson(result.data);
     if (b64) {
       const buffer = Buffer.from(b64.replace(/^data:video\/\w+;base64,/, ''), 'base64');
       const uploaded = await uploadBufferToSupabase(buffer, 'video/mp4', creatorFolder(selectedCreatorSlug, 'generated-videos'));
-      return res.json({ ok: true, url: uploaded.url, path: uploaded.path, raw: result.data, imageUrl, creator: CREATORS[selectedCreatorSlug] });
+
+      return res.json({
+        ok: true,
+        url: uploaded.url,
+        path: uploaded.path,
+        raw: result.data,
+        imageUrl,
+        creator: CREATORS[selectedCreatorSlug]
+      });
     }
 
     if (result.data?.id || result.data?.job_id) {
-      return res.json({ ok: true, jobId: result.data.id || result.data.job_id, raw: result.data, imageUrl, creator: CREATORS[selectedCreatorSlug] });
+      return res.json({
+        ok: true,
+        jobId: result.data.id || result.data.job_id,
+        raw: result.data,
+        imageUrl,
+        creator: CREATORS[selectedCreatorSlug]
+      });
     }
 
     throw new Error('Unknown Segmind video response format');
